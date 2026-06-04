@@ -10,11 +10,13 @@ import 'package:http/http.dart' as http;
 import 'package:window_manager/window_manager.dart';
 
 import '../app.dart';
+import '../lan/lan_transfer_service.dart';
 import '../magnets/magnet_library.dart';
 import '../plugins/json_source_plugin.dart';
 import '../plugins/magnet_item.dart';
 import '../settings/app_settings.dart';
 import 'human_verification_dialog.dart';
+import 'lan_transfer_page.dart';
 import 'magnet_library_page.dart';
 import 'pan_search_page.dart';
 
@@ -22,6 +24,7 @@ enum _WorkbenchSection {
   search('资源搜索', '磁力', Icons.search_rounded),
   library('收藏管理', '收藏', Icons.bookmarks_rounded),
   pan('搜盘', '搜盘', Icons.cloud_rounded),
+  lan('局域网互传', '互传', Icons.sync_alt_rounded),
   settings('设置中心', '设置', Icons.tune_rounded);
 
   const _WorkbenchSection(this.label, this.dockLabel, this.icon);
@@ -41,6 +44,7 @@ class PluginSearchPage extends StatefulWidget {
 class _PluginSearchPageState extends State<PluginSearchPage> {
   final JsonPluginRegistry _registry = JsonPluginRegistry();
   final MagnetLibrary _magnetLibrary = MagnetLibrary();
+  final LanTransferService _lanTransferService = LanTransferService();
   final TextEditingController _queryController = TextEditingController();
   final TextEditingController _pluginFilterController = TextEditingController();
   final Map<String, VerifiedWebViewSession> _verifiedSessions =
@@ -76,6 +80,7 @@ class _PluginSearchPageState extends State<PluginSearchPage> {
     for (final VerifiedWebViewSession session in _verifiedSessions.values) {
       unawaited(session.dispose());
     }
+    unawaited(_lanTransferService.stop());
     super.dispose();
   }
 
@@ -182,6 +187,8 @@ class _PluginSearchPageState extends State<PluginSearchPage> {
         return const MagnetLibraryPage();
       case _WorkbenchSection.pan:
         return const PanSearchSection();
+      case _WorkbenchSection.lan:
+        return LanTransferPage(service: _lanTransferService);
       case _WorkbenchSection.settings:
         if (_showPluginSettings) {
           return _PluginsSection(
@@ -335,6 +342,8 @@ class _PluginSearchPageState extends State<PluginSearchPage> {
         return 980;
       case _WorkbenchSection.pan:
         return 1060;
+      case _WorkbenchSection.lan:
+        return 1120;
       case _WorkbenchSection.settings:
         return _showPluginSettings ? 920 : 840;
     }
