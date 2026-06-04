@@ -458,9 +458,9 @@ class LanTransferService extends ChangeNotifier {
 
   Future<HttpServer> _bindServer() async {
     try {
-      return HttpServer.bind(InternetAddress.anyIPv4, transferPort);
+      return await HttpServer.bind(InternetAddress.anyIPv4, transferPort);
     } on SocketException {
-      return HttpServer.bind(InternetAddress.anyIPv4, 0);
+      return await HttpServer.bind(InternetAddress.anyIPv4, 0);
     }
   }
 }
