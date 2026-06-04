@@ -1,29 +1,12 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
-import 'platform/android_foreground_service.dart';
 import 'ui/plugin_search_page.dart';
 
-class MagnetFinderApp extends StatefulWidget {
+class MagnetFinderApp extends StatelessWidget {
   const MagnetFinderApp({super.key});
-
-  @override
-  State<MagnetFinderApp> createState() => _MagnetFinderAppState();
-}
-
-class _MagnetFinderAppState extends State<MagnetFinderApp> {
-  @override
-  void initState() {
-    super.initState();
-    if (Platform.isAndroid) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        unawaited(startAndroidForegroundService());
-      });
-    }
-  }
 
   @override
   Widget build(BuildContext context) {

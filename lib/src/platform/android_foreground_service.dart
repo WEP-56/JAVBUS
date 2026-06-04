@@ -84,6 +84,20 @@ Future<void> updateAndroidForegroundStatus({
   }
 }
 
+Future<void> stopAndroidForegroundService() async {
+  try {
+    if (await FlutterForegroundTask.isRunningService) {
+      final ServiceRequestResult result =
+          await FlutterForegroundTask.stopService();
+      if (result is ServiceRequestFailure) {
+        debugPrint('Failed to stop JAVBUS foreground service: ${result.error}');
+      }
+    }
+  } on Object catch (error) {
+    debugPrint('Failed to stop JAVBUS foreground service: $error');
+  }
+}
+
 @pragma('vm:entry-point')
 void _androidForegroundCallback() {
   FlutterForegroundTask.setTaskHandler(_JavbusForegroundTaskHandler());

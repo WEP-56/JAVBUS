@@ -54,6 +54,7 @@ class _WindowsRuntime with WindowListener, TrayListener {
   final AppSettingsStore _settingsStore;
   Timer? _timer;
   bool _forceExit = false;
+  bool _handlingClose = false;
 
   Future<void> initializeTray() async {
     await trayManager.setIcon('windows/runner/resources/app_icon.ico');
@@ -132,18 +133,28 @@ class _WindowsRuntime with WindowListener, TrayListener {
   }
 
   Future<void> _handleWindowClose() async {
-    await _save();
     if (_forceExit) {
       await trayManager.destroy();
       await windowManager.destroy();
       return;
     }
-    final AppSettings settings = await _settingsStore.load();
-    if (settings.windowsCloseBehavior == 'exit') {
-      await _exitApp();
+    if (_handlingClose) {
       return;
     }
+    _handlingClose = true;
+    _timer?.cancel();
+    final Future<AppSettings> settingsFuture = _settingsStore.load();
+    final Future<void> saveFuture = _save().catchError((Object _) {});
     await windowManager.hide();
+    try {
+      final AppSettings settings = await settingsFuture;
+      if (settings.windowsCloseBehavior == 'exit') {
+        await _exitApp(saveWindowState: false);
+      }
+    } finally {
+      unawaited(saveFuture);
+      _handlingClose = false;
+    }
   }
 
   Future<void> _showWindow() async {
@@ -156,9 +167,12 @@ class _WindowsRuntime with WindowListener, TrayListener {
     await windowManager.focus();
   }
 
-  Future<void> _exitApp() async {
+  Future<void> _exitApp({bool saveWindowState = true}) async {
     _forceExit = true;
-    await _save();
+    _timer?.cancel();
+    if (saveWindowState) {
+      unawaited(_save().catchError((Object _) {}));
+    }
     await trayManager.destroy();
     await windowManager.destroy();
   }

@@ -1,18 +1,25 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:open_filex/open_filex.dart';
 
 import '../app.dart';
 import '../lan/lan_models.dart';
 import '../lan/lan_transfer_service.dart';
 
 class LanTransferPage extends StatefulWidget {
-  const LanTransferPage({required this.service, super.key});
+  const LanTransferPage({
+    required this.service,
+    required this.onStartService,
+    required this.onStopService,
+    super.key,
+  });
 
   final LanTransferService service;
+  final Future<void> Function() onStartService;
+  final Future<void> Function() onStopService;
 
   @override
   State<LanTransferPage> createState() => _LanTransferPageState();
@@ -23,12 +30,7 @@ class _LanTransferPageState extends State<LanTransferPage> {
 
   String? _selectedPeerId;
   bool _sending = false;
-
-  @override
-  void initState() {
-    super.initState();
-    unawaited(widget.service.start());
-  }
+  bool _switchingService = false;
 
   @override
   void dispose() {
@@ -51,7 +53,11 @@ class _LanTransferPageState extends State<LanTransferPage> {
                     ScrollViewKeyboardDismissBehavior.onDrag,
                 slivers: <Widget>[
                   SliverToBoxAdapter(
-                    child: _StatusPanel(service: widget.service),
+                    child: _StatusPanel(
+                      service: widget.service,
+                      switching: _switchingService,
+                      onToggle: _toggleService,
+                    ),
                   ),
                   const SliverToBoxAdapter(child: SizedBox(height: 12)),
                   SliverToBoxAdapter(
@@ -59,7 +65,9 @@ class _LanTransferPageState extends State<LanTransferPage> {
                       peers: widget.service.peers,
                       selectedPeerId: _selectedPeerId,
                       onSelect: _selectPeer,
-                      onRefresh: widget.service.announce,
+                      onRefresh: widget.service.running
+                          ? widget.service.announce
+                          : null,
                       onAddManual: _addManualPeer,
                       fillAvailableHeight: false,
                     ),
@@ -80,6 +88,7 @@ class _LanTransferPageState extends State<LanTransferPage> {
                       records: widget.service.history,
                       onClear: widget.service.clearHistory,
                       onCopyText: _copyText,
+                      onOpenFile: _openFile,
                       fillAvailableHeight: false,
                     ),
                   ),
@@ -93,14 +102,20 @@ class _LanTransferPageState extends State<LanTransferPage> {
                   width: 292,
                   child: Column(
                     children: <Widget>[
-                      _StatusPanel(service: widget.service),
+                      _StatusPanel(
+                        service: widget.service,
+                        switching: _switchingService,
+                        onToggle: _toggleService,
+                      ),
                       const SizedBox(height: 12),
                       Expanded(
                         child: _PeerPanel(
                           peers: widget.service.peers,
                           selectedPeerId: _selectedPeerId,
                           onSelect: _selectPeer,
-                          onRefresh: widget.service.announce,
+                          onRefresh: widget.service.running
+                              ? widget.service.announce
+                              : null,
                           onAddManual: _addManualPeer,
                           fillAvailableHeight: true,
                         ),
@@ -125,6 +140,7 @@ class _LanTransferPageState extends State<LanTransferPage> {
                           records: widget.service.history,
                           onClear: widget.service.clearHistory,
                           onCopyText: _copyText,
+                          onOpenFile: _openFile,
                           fillAvailableHeight: true,
                         ),
                       ),
@@ -158,7 +174,33 @@ class _LanTransferPageState extends State<LanTransferPage> {
     setState(() => _selectedPeerId = peer.id);
   }
 
+  Future<void> _toggleService() async {
+    if (_switchingService || widget.service.starting) {
+      return;
+    }
+    setState(() => _switchingService = true);
+    try {
+      if (widget.service.running) {
+        await widget.onStopService();
+        _showSnack('局域网互传已关闭');
+      } else {
+        await widget.onStartService();
+        _showSnack(widget.service.running ? '局域网互传已开启' : '局域网互传启动失败');
+      }
+    } catch (error) {
+      _showSnack(error.toString());
+    } finally {
+      if (mounted) {
+        setState(() => _switchingService = false);
+      }
+    }
+  }
+
   Future<void> _sendText(LanPeer? peer) async {
+    if (!widget.service.running) {
+      _showSnack('请先开启局域网互传');
+      return;
+    }
     if (peer == null || _sending) {
       return;
     }
@@ -177,6 +219,10 @@ class _LanTransferPageState extends State<LanTransferPage> {
   }
 
   Future<void> _sendFile(LanPeer? peer) async {
+    if (!widget.service.running) {
+      _showSnack('请先开启局域网互传');
+      return;
+    }
     if (peer == null || _sending) {
       return;
     }
@@ -203,12 +249,36 @@ class _LanTransferPageState extends State<LanTransferPage> {
     _showSnack('已复制文本');
   }
 
+  Future<void> _openFile(String path) async {
+    final File file = File(path);
+    if (!await file.exists()) {
+      _showSnack('文件不存在或已被移动');
+      return;
+    }
+    if (Platform.isWindows) {
+      try {
+        await Process.start('explorer.exe', <String>['/select,', path]);
+        return;
+      } on Object {
+        // Fall through to the platform opener.
+      }
+    }
+    final OpenResult result = await OpenFilex.open(path);
+    if (result.type != ResultType.done) {
+      _showSnack(result.message);
+    }
+  }
+
   Future<void> _addManualPeer() async {
     final String? value = await showDialog<String>(
       context: context,
       builder: (BuildContext context) => const _ManualPeerDialog(),
     );
     if (value == null || value.trim().isEmpty) {
+      return;
+    }
+    if (!widget.service.running) {
+      _showSnack('请先开启局域网互传');
       return;
     }
     try {
@@ -231,13 +301,20 @@ class _LanTransferPageState extends State<LanTransferPage> {
 }
 
 class _StatusPanel extends StatelessWidget {
-  const _StatusPanel({required this.service});
+  const _StatusPanel({
+    required this.service,
+    required this.switching,
+    required this.onToggle,
+  });
 
   final LanTransferService service;
+  final bool switching;
+  final VoidCallback onToggle;
 
   @override
   Widget build(BuildContext context) {
     final bool running = service.running;
+    final bool busy = service.starting || switching;
     return _LanSurface(
       child: Row(
         children: <Widget>[
@@ -274,7 +351,9 @@ class _StatusPanel extends StatelessWidget {
                 Text(
                   running
                       ? '${service.deviceName} · 端口 ${service.port}'
-                      : service.error ?? '正在启动本地接收服务',
+                      : busy
+                      ? '正在启动本地接收服务'
+                      : service.error ?? '点击开启后可发现设备并接收文本、文件',
                   style: TextStyle(
                     color: AppTheme.text3(context),
                     fontSize: 12,
@@ -287,6 +366,15 @@ class _StatusPanel extends StatelessWidget {
             const SizedBox.square(
               dimension: 18,
               child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          else
+            FilledButton.icon(
+              onPressed: busy ? null : onToggle,
+              icon: Icon(
+                running ? Icons.stop_rounded : Icons.play_arrow_rounded,
+                size: 18,
+              ),
+              label: Text(running ? '停止' : '开启'),
             ),
         ],
       ),
@@ -307,7 +395,7 @@ class _PeerPanel extends StatelessWidget {
   final List<LanPeer> peers;
   final String? selectedPeerId;
   final ValueChanged<LanPeer> onSelect;
-  final VoidCallback onRefresh;
+  final VoidCallback? onRefresh;
   final VoidCallback onAddManual;
   final bool fillAvailableHeight;
 
@@ -516,12 +604,14 @@ class _HistoryPanel extends StatelessWidget {
     required this.records,
     required this.onClear,
     required this.onCopyText,
+    required this.onOpenFile,
     required this.fillAvailableHeight,
   });
 
   final List<LanTransferRecord> records;
   final VoidCallback onClear;
   final ValueChanged<String> onCopyText;
+  final ValueChanged<String> onOpenFile;
   final bool fillAvailableHeight;
 
   @override
@@ -560,7 +650,11 @@ class _HistoryPanel extends StatelessWidget {
             )
           else if (fillAvailableHeight)
             Expanded(
-              child: _HistoryList(records: records, onCopyText: onCopyText),
+              child: _HistoryList(
+                records: records,
+                onCopyText: onCopyText,
+                onOpenFile: onOpenFile,
+              ),
             )
           else
             Column(
@@ -570,7 +664,11 @@ class _HistoryPanel extends StatelessWidget {
                   index < records.length;
                   index += 1
                 ) ...<Widget>[
-                  _HistoryItem(record: records[index], onCopyText: onCopyText),
+                  _HistoryItem(
+                    record: records[index],
+                    onCopyText: onCopyText,
+                    onOpenFile: onOpenFile,
+                  ),
                   if (index != records.length - 1) const SizedBox(height: 8),
                 ],
               ],
@@ -582,16 +680,25 @@ class _HistoryPanel extends StatelessWidget {
 }
 
 class _HistoryList extends StatelessWidget {
-  const _HistoryList({required this.records, required this.onCopyText});
+  const _HistoryList({
+    required this.records,
+    required this.onCopyText,
+    required this.onOpenFile,
+  });
 
   final List<LanTransferRecord> records;
   final ValueChanged<String> onCopyText;
+  final ValueChanged<String> onOpenFile;
 
   @override
   Widget build(BuildContext context) {
     return ListView.separated(
       itemBuilder: (BuildContext context, int index) {
-        return _HistoryItem(record: records[index], onCopyText: onCopyText);
+        return _HistoryItem(
+          record: records[index],
+          onCopyText: onCopyText,
+          onOpenFile: onOpenFile,
+        );
       },
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemCount: records.length,
@@ -600,10 +707,15 @@ class _HistoryList extends StatelessWidget {
 }
 
 class _HistoryItem extends StatelessWidget {
-  const _HistoryItem({required this.record, required this.onCopyText});
+  const _HistoryItem({
+    required this.record,
+    required this.onCopyText,
+    required this.onOpenFile,
+  });
 
   final LanTransferRecord record;
   final ValueChanged<String> onCopyText;
+  final ValueChanged<String> onOpenFile;
 
   @override
   Widget build(BuildContext context) {
@@ -687,6 +799,14 @@ class _HistoryItem extends StatelessWidget {
               tooltip: '复制',
               onPressed: () => onCopyText(record.text!),
               icon: const Icon(Icons.content_copy_rounded, size: 17),
+            )
+          else if (record.kind == LanTransferKind.file &&
+              record.filePath != null &&
+              record.filePath!.isNotEmpty)
+            IconButton(
+              tooltip: Platform.isWindows ? '在资源管理器中显示' : '打开文件',
+              onPressed: () => onOpenFile(record.filePath!),
+              icon: const Icon(Icons.folder_open_rounded, size: 18),
             ),
         ],
       ),

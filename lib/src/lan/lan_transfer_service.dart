@@ -30,6 +30,7 @@ class LanTransferService extends ChangeNotifier {
   List<LanTransferRecord> _history = const <LanTransferRecord>[];
   late final String _deviceId = _newId();
   late final String _deviceName = _defaultDeviceName();
+  int _serviceGeneration = 0;
   bool _starting = false;
   String? _error;
 
@@ -53,6 +54,8 @@ class LanTransferService extends ChangeNotifier {
     }
     _starting = true;
     _error = null;
+    _serviceGeneration++;
+    final int generation = _serviceGeneration;
     notifyListeners();
     try {
       _history = await _historyStore.load();
@@ -75,20 +78,21 @@ class LanTransferService extends ChangeNotifier {
       );
       _scanTimer = Timer.periodic(
         const Duration(seconds: 30),
-        (_) => unawaited(_scanLocalNetwork()),
+        (_) => unawaited(_scanLocalNetwork(generation)),
       );
       announce();
-      unawaited(_scanLocalNetwork());
+      unawaited(_scanLocalNetwork(generation));
     } catch (error) {
       _error = error.toString();
-      await stop();
+      await stop(clearError: false);
     } finally {
       _starting = false;
       notifyListeners();
     }
   }
 
-  Future<void> stop() async {
+  Future<void> stop({bool clearError = true}) async {
+    _serviceGeneration++;
     _announceTimer?.cancel();
     _announceTimer = null;
     _pruneTimer?.cancel();
@@ -100,6 +104,11 @@ class LanTransferService extends ChangeNotifier {
     await _server?.close(force: true);
     _server = null;
     _peers.clear();
+    _pendingPeerChecks.clear();
+    _starting = false;
+    if (clearError) {
+      _error = null;
+    }
     notifyListeners();
   }
 
@@ -489,6 +498,10 @@ class LanTransferService extends ChangeNotifier {
     String? announcedId,
     String? announcedName,
   }) {
+    final int generation = _serviceGeneration;
+    if (!running) {
+      return;
+    }
     if (_isBadPeerAddress(address)) {
       return;
     }
@@ -498,9 +511,9 @@ class LanTransferService extends ChangeNotifier {
     }
     _pendingPeerChecks.add(key);
     unawaited(
-      _pingPeer(address, port)
+      _pingPeer(address, port, timeout: const Duration(milliseconds: 650))
           .then((LanPeer? peer) {
-            if (peer != null) {
+            if (peer != null && generation == _serviceGeneration && running) {
               _rememberPeer(peer);
             }
           })
@@ -508,7 +521,11 @@ class LanTransferService extends ChangeNotifier {
     );
   }
 
-  Future<LanPeer?> _pingPeer(String address, int port) async {
+  Future<LanPeer?> _pingPeer(
+    String address,
+    int port, {
+    Duration timeout = const Duration(milliseconds: 900),
+  }) async {
     if (_isBadPeerAddress(address)) {
       return null;
     }
@@ -528,7 +545,7 @@ class LanTransferService extends ChangeNotifier {
                   .toString(),
             },
           )
-          .timeout(const Duration(milliseconds: 900));
+          .timeout(timeout);
       if (response.statusCode < 200 || response.statusCode >= 300) {
         return null;
       }
@@ -553,6 +570,9 @@ class LanTransferService extends ChangeNotifier {
   }
 
   void _rememberPeer(LanPeer peer) {
+    if (!running) {
+      return;
+    }
     if (peer.id == _deviceId || _isBadPeerAddress(peer.address)) {
       return;
     }
@@ -560,9 +580,9 @@ class LanTransferService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _scanLocalNetwork() async {
+  Future<void> _scanLocalNetwork(int generation) async {
     final HttpServer? server = _server;
-    if (server == null) {
+    if (server == null || generation != _serviceGeneration) {
       return;
     }
     final Set<String> candidates = <String>{};
@@ -578,6 +598,9 @@ class LanTransferService extends ChangeNotifier {
             continue;
           }
           for (int index = 1; index < 255; index += 1) {
+            if (generation != _serviceGeneration) {
+              return;
+            }
             final String candidate =
                 '${parts[0]}.${parts[1]}.${parts[2]}.$index';
             if (candidate != address.address) {
@@ -589,11 +612,17 @@ class LanTransferService extends ChangeNotifier {
     } on Object {
       return;
     }
-    const int concurrency = 32;
+    if (generation != _serviceGeneration) {
+      return;
+    }
+    const int concurrency = 12;
     final List<String> queue = candidates.toList(growable: false);
     int nextIndex = 0;
     Future<void> worker() async {
       while (nextIndex < queue.length) {
+        if (generation != _serviceGeneration || !running) {
+          return;
+        }
         final String address = queue[nextIndex];
         nextIndex += 1;
         final String key = '$address:$transferPort';
@@ -602,8 +631,12 @@ class LanTransferService extends ChangeNotifier {
         }
         _pendingPeerChecks.add(key);
         try {
-          final LanPeer? peer = await _pingPeer(address, transferPort);
-          if (peer != null) {
+          final LanPeer? peer = await _pingPeer(
+            address,
+            transferPort,
+            timeout: const Duration(milliseconds: 450),
+          );
+          if (peer != null && generation == _serviceGeneration && running) {
             _rememberPeer(peer);
           }
         } finally {

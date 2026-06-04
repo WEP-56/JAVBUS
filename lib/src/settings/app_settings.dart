@@ -9,6 +9,7 @@ class AppSettings {
     required this.panRequiresApiKey,
     required this.panApiKey,
     required this.lanReceiveDirectory,
+    required this.lanAutoStart,
     required this.themeMode,
     required this.accentColor,
     required this.windowsCloseBehavior,
@@ -20,6 +21,7 @@ class AppSettings {
   final bool panRequiresApiKey;
   final String panApiKey;
   final String lanReceiveDirectory;
+  final bool lanAutoStart;
   final String themeMode;
   final String accentColor;
   final String windowsCloseBehavior;
@@ -33,6 +35,7 @@ class AppSettings {
     bool? panRequiresApiKey,
     String? panApiKey,
     String? lanReceiveDirectory,
+    bool? lanAutoStart,
     String? themeMode,
     String? accentColor,
     String? windowsCloseBehavior,
@@ -44,6 +47,7 @@ class AppSettings {
       panRequiresApiKey: panRequiresApiKey ?? this.panRequiresApiKey,
       panApiKey: panApiKey ?? this.panApiKey,
       lanReceiveDirectory: lanReceiveDirectory ?? this.lanReceiveDirectory,
+      lanAutoStart: lanAutoStart ?? this.lanAutoStart,
       themeMode: themeMode ?? this.themeMode,
       accentColor: accentColor ?? this.accentColor,
       windowsCloseBehavior: windowsCloseBehavior ?? this.windowsCloseBehavior,
@@ -58,6 +62,7 @@ class AppSettings {
       'panRequiresApiKey': panRequiresApiKey,
       'panApiKey': panApiKey,
       'lanReceiveDirectory': lanReceiveDirectory,
+      'lanAutoStart': lanAutoStart,
       'themeMode': themeMode,
       'accentColor': accentColor,
       'windowsCloseBehavior': windowsCloseBehavior,
@@ -72,6 +77,7 @@ class AppSettings {
       panRequiresApiKey: _boolValue(json['panRequiresApiKey']),
       panApiKey: _stringValue(json['panApiKey']),
       lanReceiveDirectory: _stringValue(json['lanReceiveDirectory']),
+      lanAutoStart: _boolValue(json['lanAutoStart']),
       themeMode: _themeModeValue(json['themeMode']),
       accentColor: _accentColorValue(json['accentColor']),
       windowsCloseBehavior: _windowsCloseBehaviorValue(
@@ -87,6 +93,7 @@ class AppSettings {
     panRequiresApiKey: false,
     panApiKey: '',
     lanReceiveDirectory: '',
+    lanAutoStart: false,
     themeMode: 'system',
     accentColor: 'teal',
     windowsCloseBehavior: 'minimizeToTray',

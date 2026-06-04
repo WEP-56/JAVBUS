@@ -31,8 +31,12 @@ dependencies:
     sdk: flutter
   flutter_foreground_task: ^9.2.2
   http: ^1.6.0
+  open_filex: ^4.7.0
+  package_info_plus: ^9.0.1
   path_provider: ^2.1.5
+  permission_handler: ^12.0.3
   tray_manager: ^0.5.2
+  url_launcher: ^6.3.2
   webview_flutter: ^4.13.1
   webview_windows: ^0.4.0
   window_manager: ^0.5.1

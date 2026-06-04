@@ -177,20 +177,26 @@ class _PanSearchSectionState extends State<PanSearchSection> {
   }
 
   Future<void> _saveShare(PanShareItem item) async {
-    await _library.upsert(
-      newStoredFavorite(
-        id: 'pan_${_stableId(item.url)}',
-        kind: FavoriteKind.pan,
-        title: item.title,
-        url: item.url,
-        password: item.password,
-        tags: <String>[_cloudLabel(item.cloudType)],
-        note: item.note,
-        source: item.source,
-      ),
-    );
-    if (mounted) {
-      _showSnack('已保存到收藏');
+    try {
+      await _library.upsert(
+        newStoredFavorite(
+          id: 'pan_${_stableId(item.url)}',
+          kind: FavoriteKind.pan,
+          title: item.title,
+          url: item.url,
+          password: item.password,
+          tags: <String>[_cloudLabel(item.cloudType)],
+          note: item.note,
+          source: item.source,
+        ),
+      );
+      if (mounted) {
+        _showSnack('已保存到收藏');
+      }
+    } on Object catch (error) {
+      if (mounted) {
+        _showSnack('收藏失败：$error');
+      }
     }
   }
 

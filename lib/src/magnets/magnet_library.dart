@@ -114,7 +114,11 @@ class StoredFavorite {
 typedef StoredMagnet = StoredFavorite;
 
 class MagnetLibrary {
+  MagnetLibrary({Directory? storageRoot}) : _storageRoot = storageRoot;
+
   static final ValueNotifier<int> revision = ValueNotifier<int>(0);
+
+  final Directory? _storageRoot;
 
   Future<List<StoredFavorite>> load() async {
     final File file = await _file();
@@ -143,7 +147,7 @@ class MagnetLibrary {
   }
 
   Future<StoredFavorite> upsert(StoredFavorite item) async {
-    final List<StoredFavorite> items = await load();
+    final List<StoredFavorite> items = List<StoredFavorite>.of(await load());
     final int index = items.indexWhere(
       (StoredFavorite candidate) => candidate.id == item.id,
     );
@@ -159,7 +163,7 @@ class MagnetLibrary {
   }
 
   Future<void> delete(String id) async {
-    final List<StoredFavorite> items = await load();
+    final List<StoredFavorite> items = List<StoredFavorite>.of(await load());
     items.removeWhere((StoredFavorite item) => item.id == id);
     await saveAll(items);
     revision.value++;
@@ -182,13 +186,27 @@ class MagnetLibrary {
   }
 
   Future<File> _file() async {
-    final Directory directory = await AppStorage.ensureSubdirectory('library');
+    final Directory directory = await _libraryDirectory();
     return File('${directory.path}${Platform.pathSeparator}favorites.json');
   }
 
   Future<File> _legacyFile() async {
-    final Directory directory = await AppStorage.ensureSubdirectory('library');
+    final Directory directory = await _libraryDirectory();
     return File('${directory.path}${Platform.pathSeparator}magnets.json');
+  }
+
+  Future<Directory> _libraryDirectory() async {
+    final Directory? root = _storageRoot;
+    if (root == null) {
+      return AppStorage.ensureSubdirectory('library');
+    }
+    final Directory directory = Directory(
+      '${root.path}${Platform.pathSeparator}library',
+    );
+    if (!await directory.exists()) {
+      await directory.create(recursive: true);
+    }
+    return directory;
   }
 }
 

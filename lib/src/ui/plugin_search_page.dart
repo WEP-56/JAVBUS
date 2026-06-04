@@ -7,6 +7,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../app.dart';
@@ -14,6 +16,7 @@ import '../lan/lan_transfer_service.dart';
 import '../magnets/magnet_library.dart';
 import '../plugins/json_source_plugin.dart';
 import '../plugins/magnet_item.dart';
+import '../platform/android_storage_access.dart';
 import '../platform/android_foreground_service.dart';
 import '../settings/app_settings.dart';
 import 'human_verification_dialog.dart';
@@ -83,7 +86,6 @@ class _PluginSearchPageState extends State<PluginSearchPage> {
     if (Platform.isAndroid) {
       _lanTransferService.addListener(_syncAndroidForegroundStatus);
     }
-    unawaited(_lanTransferService.start());
     _loadSettings();
     _loadPlugins();
   }
@@ -98,7 +100,7 @@ class _PluginSearchPageState extends State<PluginSearchPage> {
     if (Platform.isAndroid) {
       _lanTransferService.removeListener(_syncAndroidForegroundStatus);
     }
-    unawaited(_lanTransferService.stop());
+    unawaited(_stopLanTransferService());
     super.dispose();
   }
 
@@ -202,7 +204,11 @@ class _PluginSearchPageState extends State<PluginSearchPage> {
                   _buildSearchSection(),
                   const PanSearchSection(),
                   const MagnetLibraryPage(),
-                  LanTransferPage(service: _lanTransferService),
+                  LanTransferPage(
+                    service: _lanTransferService,
+                    onStartService: _startLanTransferService,
+                    onStopService: _stopLanTransferService,
+                  ),
                 ],
               ),
             ),
@@ -443,6 +449,11 @@ class _PluginSearchPageState extends State<PluginSearchPage> {
         _settings = settings;
         _loadingSettings = false;
       });
+      if (settings.lanAutoStart) {
+        unawaited(_startLanTransferService());
+      } else if (Platform.isAndroid) {
+        unawaited(stopAndroidForegroundService());
+      }
     } catch (error) {
       if (!mounted) {
         return;
@@ -459,7 +470,28 @@ class _PluginSearchPageState extends State<PluginSearchPage> {
     }
   }
 
+  Future<void> _startLanTransferService() async {
+    if (Platform.isAndroid) {
+      await startAndroidForegroundService();
+    }
+    await _lanTransferService.start();
+    _syncAndroidForegroundStatus();
+  }
+
+  Future<void> _stopLanTransferService() async {
+    if (!_lanTransferService.running && !_lanTransferService.starting) {
+      return;
+    }
+    await _lanTransferService.stop();
+    if (Platform.isAndroid) {
+      await stopAndroidForegroundService();
+    }
+  }
+
   void _syncAndroidForegroundStatus() {
+    if (!Platform.isAndroid) {
+      return;
+    }
     unawaited(
       updateAndroidForegroundStatus(
         running: _lanTransferService.running,
@@ -734,32 +766,38 @@ class _PluginSearchPageState extends State<PluginSearchPage> {
   }
 
   Future<void> _saveMagnet(MagnetItem item) async {
-    MagnetItem target = item;
-    if (target.magnet.isEmpty) {
-      final MagnetItem? detailed = await _loadDetailsForSave(item);
-      if (detailed != null) {
-        target = detailed;
+    try {
+      MagnetItem target = item;
+      if (target.magnet.isEmpty) {
+        final MagnetItem? detailed = await _loadDetailsForSave(item);
+        if (detailed != null) {
+          target = detailed;
+        }
       }
-    }
-    if (target.magnet.isEmpty) {
-      _showSnack('当前结果没有 magnet 链接');
-      return;
-    }
-    final String stableId = target.infoHash.isNotEmpty
-        ? 'magnet_${target.infoHash.toUpperCase()}'
-        : 'magnet_${_stableFavoriteId(target.magnet)}';
-    await _magnetLibrary.upsert(
-      newStoredMagnet(
-        id: stableId,
-        title: target.title.isEmpty ? target.infoHash : target.title,
-        magnet: target.magnet,
-        tags: <String>[target.pluginName],
-        note: target.largestFile,
-        source: target.webUrl,
-      ),
-    );
-    if (mounted) {
-      _showSnack('已保存到收藏');
+      if (target.magnet.isEmpty) {
+        _showSnack('当前结果没有 magnet 链接');
+        return;
+      }
+      final String stableId = target.infoHash.isNotEmpty
+          ? 'magnet_${target.infoHash.toUpperCase()}'
+          : 'magnet_${_stableFavoriteId(target.magnet)}';
+      await _magnetLibrary.upsert(
+        newStoredMagnet(
+          id: stableId,
+          title: target.title.isEmpty ? target.infoHash : target.title,
+          magnet: target.magnet,
+          tags: <String>[target.pluginName],
+          note: target.largestFile,
+          source: target.webUrl,
+        ),
+      );
+      if (mounted) {
+        _showSnack('已保存到收藏');
+      }
+    } on Object catch (error) {
+      if (mounted) {
+        _showSnack('收藏失败：$error');
+      }
     }
   }
 
@@ -1939,6 +1977,13 @@ class _SettingsSection extends StatefulWidget {
 }
 
 class _SettingsSectionState extends State<_SettingsSection> {
+  static final Uri _latestReleaseUrl = Uri.parse(
+    'https://github.com/WEP-56/JAVBUS/releases/latest',
+  );
+  static final Uri _releasePage = Uri.parse(
+    'https://github.com/WEP-56/JAVBUS/releases',
+  );
+
   final TextEditingController _panServiceController = TextEditingController();
   final TextEditingController _panKeyController = TextEditingController();
 
@@ -2025,6 +2070,102 @@ class _SettingsSectionState extends State<_SettingsSection> {
     _showSnack(behavior == 'exit' ? '关闭按钮将直接退出' : '关闭按钮将隐藏到托盘');
   }
 
+  Future<void> _saveLanAutoStart(bool value) async {
+    await widget.onSettingsChanged(
+      widget.settings.copyWith(lanAutoStart: value),
+    );
+    _showSnack(value ? '局域网互传将随应用启动' : '已关闭局域网互传自启动');
+  }
+
+  Future<void> _showAboutDialog() async {
+    final PackageInfo packageInfo = await PackageInfo.fromPlatform();
+    if (!mounted) {
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext context) {
+        return _AboutJavbusDialog(
+          version: packageInfo.version,
+          buildNumber: packageInfo.buildNumber,
+          onCheckUpdate: _checkForUpdates,
+          onOpenReleases: _openReleasePage,
+        );
+      },
+    );
+  }
+
+  Future<void> _checkForUpdates() async {
+    try {
+      final PackageInfo packageInfo = await PackageInfo.fromPlatform();
+      final http.Response response = await http
+          .get(
+            _latestReleaseUrl,
+            headers: const <String, String>{'User-Agent': 'JAVBUS'},
+          )
+          .timeout(const Duration(seconds: 12));
+      if (response.statusCode == 404) {
+        _showSnack('还没有发布过 Release');
+        return;
+      }
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw HttpException('GitHub Release 页面返回 HTTP ${response.statusCode}');
+      }
+      final String latest = _latestVersionFromReleaseResponse(response);
+      if (latest.isEmpty) {
+        throw const FormatException('无法从 Release 页面识别版本号');
+      }
+      final bool hasUpdate = _compareVersions(latest, packageInfo.version) > 0;
+      if (!mounted) {
+        return;
+      }
+      if (hasUpdate) {
+        await _showUpdateDialog(latest, packageInfo.version);
+      } else {
+        _showSnack('当前已是最新版本');
+      }
+    } on Object catch (error) {
+      if (mounted) {
+        _showSnack('检测更新失败：$error');
+      }
+    }
+  }
+
+  Future<void> _showUpdateDialog(String latest, String current) async {
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('发现新版本'),
+          content: Text('当前版本 $current，最新版本 $latest。请前往 GitHub Release 页面下载。'),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('稍后'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                unawaited(_openReleasePage());
+              },
+              child: const Text('打开 Release'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _openReleasePage() async {
+    final bool opened = await launchUrl(
+      _releasePage,
+      mode: LaunchMode.externalApplication,
+    );
+    if (!opened && mounted) {
+      _showSnack('无法打开 Release 页面');
+    }
+  }
+
   Future<void> _chooseLanReceiveDirectory() async {
     final String? directory = await FilePicker.getDirectoryPath(
       dialogTitle: '选择互传接收目录',
@@ -2033,6 +2174,11 @@ class _SettingsSectionState extends State<_SettingsSection> {
           : widget.settings.lanReceiveDirectory.trim(),
     );
     if (directory == null || directory.trim().isEmpty) {
+      return;
+    }
+    if (Platform.isAndroid &&
+        !await AndroidStorageAccess.ensurePublicDirectoryAccess()) {
+      _showSnack('需要授予所有文件访问权限后才能保存到该目录');
       return;
     }
     try {
@@ -2150,6 +2296,18 @@ class _SettingsSectionState extends State<_SettingsSection> {
         const SliverToBoxAdapter(child: SizedBox(height: 10)),
         SliverToBoxAdapter(
           child: _SettingTile(
+            icon: Icons.sync_alt_rounded,
+            title: '自启动局域网互传服务',
+            subtitle: '开启后应用启动时会自动发现设备并接收文本、文件；关闭后可在互传页手动开启。',
+            trailing: Switch.adaptive(
+              value: widget.settings.lanAutoStart,
+              onChanged: busy ? null : _saveLanAutoStart,
+            ),
+          ),
+        ),
+        const SliverToBoxAdapter(child: SizedBox(height: 10)),
+        SliverToBoxAdapter(
+          child: _SettingTile(
             icon: Icons.download_rounded,
             title: '互传接收目录',
             subtitle: 'Windows 和 Android 接收文件时会保存到这里；留空则使用应用默认目录。',
@@ -2184,20 +2342,84 @@ class _SettingsSectionState extends State<_SettingsSection> {
         const SliverToBoxAdapter(child: SizedBox(height: 10)),
         const SliverToBoxAdapter(
           child: _SettingTile(
-            icon: Icons.rule_folder_rounded,
-            title: '插件协议',
-            subtitle: '搜索源使用 JSON v1 描述请求、字段映射和详情解析。',
-            trailing: _ValueBadge(text: 'JSON v1'),
-          ),
-        ),
-        const SliverToBoxAdapter(child: SizedBox(height: 10)),
-        const SliverToBoxAdapter(
-          child: _SettingTile(
             icon: Icons.route_rounded,
             title: '网络代理',
             subtitle: '启动时会读取 JAVBUS_PROXY、HTTP_PROXY 等环境变量，也会尝试常见本地端口。',
             trailing: _ValueBadge(text: '自动'),
           ),
+        ),
+        const SliverToBoxAdapter(child: SizedBox(height: 10)),
+        SliverToBoxAdapter(
+          child: _SettingTile(
+            icon: Icons.info_outline_rounded,
+            title: '关于',
+            subtitle: '查看版本信息，或前往 GitHub Release 获取更新。',
+            trailing: Icon(
+              Icons.chevron_right_rounded,
+              color: AppTheme.text3(context),
+            ),
+            onTap: _showAboutDialog,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _AboutJavbusDialog extends StatelessWidget {
+  const _AboutJavbusDialog({
+    required this.version,
+    required this.buildNumber,
+    required this.onCheckUpdate,
+    required this.onOpenReleases,
+  });
+
+  final String version;
+  final String buildNumber;
+  final Future<void> Function() onCheckUpdate;
+  final Future<void> Function() onOpenReleases;
+
+  @override
+  Widget build(BuildContext context) {
+    final String displayVersion = buildNumber.isEmpty
+        ? version
+        : '$version+$buildNumber';
+    return AlertDialog(
+      title: const Text('关于'),
+      content: SizedBox(
+        width: 360,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text(
+              'javbus',
+              style: TextStyle(
+                color: AppTheme.text1(context),
+                fontWeight: FontWeight.w900,
+                fontSize: 22,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '版本 $displayVersion',
+              style: TextStyle(color: AppTheme.text2(context)),
+            ),
+          ],
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('关闭'),
+        ),
+        TextButton(
+          onPressed: () => unawaited(onOpenReleases()),
+          child: const Text('Release'),
+        ),
+        FilledButton(
+          onPressed: () => unawaited(onCheckUpdate()),
+          child: const Text('检测更新'),
         ),
       ],
     );
@@ -3356,4 +3578,69 @@ String _stableFavoriteId(String value) {
     hash = (hash * 16777619) & 0xFFFFFFFF;
   }
   return hash.toUnsigned(32).toRadixString(16).padLeft(8, '0');
+}
+
+String _cleanVersion(String? value) {
+  final String raw = (value ?? '').trim();
+  if (raw.isEmpty) {
+    return '';
+  }
+  return raw
+      .replaceFirst(RegExp(r'^[vV]'), '')
+      .split('+')
+      .first
+      .replaceAll(RegExp(r'[^0-9.]'), '');
+}
+
+String _latestVersionFromReleaseResponse(http.Response response) {
+  final String fromUrl = _versionFromReleaseUrl(response.request?.url);
+  if (fromUrl.isNotEmpty) {
+    return fromUrl;
+  }
+  final RegExp urlPattern = RegExp(
+    r'https://github\.com/WEP-56/JAVBUS/releases/tag/([^"'
+    '<>\s]+)',
+    caseSensitive: false,
+  );
+  final RegExpMatch? match = urlPattern.firstMatch(response.body);
+  if (match == null) {
+    return '';
+  }
+  return _cleanVersion(match.group(1));
+}
+
+String _versionFromReleaseUrl(Uri? uri) {
+  if (uri == null) {
+    return '';
+  }
+  final List<String> segments = uri.pathSegments;
+  final int tagIndex = segments.indexOf('tag');
+  if (tagIndex < 0 || tagIndex + 1 >= segments.length) {
+    return '';
+  }
+  return _cleanVersion(segments[tagIndex + 1]);
+}
+
+int _compareVersions(String left, String right) {
+  final List<int> leftParts = _versionParts(left);
+  final List<int> rightParts = _versionParts(right);
+  final int length = leftParts.length > rightParts.length
+      ? leftParts.length
+      : rightParts.length;
+  for (int index = 0; index < length; index += 1) {
+    final int leftPart = index < leftParts.length ? leftParts[index] : 0;
+    final int rightPart = index < rightParts.length ? rightParts[index] : 0;
+    if (leftPart != rightPart) {
+      return leftPart.compareTo(rightPart);
+    }
+  }
+  return 0;
+}
+
+List<int> _versionParts(String version) {
+  return _cleanVersion(version)
+      .split('.')
+      .where((String part) => part.isNotEmpty)
+      .map((String part) => int.tryParse(part) ?? 0)
+      .toList(growable: false);
 }

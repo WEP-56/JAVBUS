@@ -34,7 +34,7 @@ void main() {
       const Offset(0, -500),
     );
     await tester.pump(const Duration(milliseconds: 300));
-    expect(find.text('插件协议'), findsOneWidget);
+    expect(find.text('关于'), findsOneWidget);
     await tester.tap(find.text('插件目录'));
     await tester.pump(const Duration(milliseconds: 300));
 
