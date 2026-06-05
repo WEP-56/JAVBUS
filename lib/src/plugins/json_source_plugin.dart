@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
@@ -16,6 +17,7 @@ class JsonSourcePlugin {
     required this.enabled,
     required this.baseUrl,
     required this.capabilities,
+    required this.announcement,
     required this.headers,
     required this.search,
     required this.detail,
@@ -30,12 +32,31 @@ class JsonSourcePlugin {
   final bool enabled;
   final Uri baseUrl;
   final PluginCapabilities capabilities;
+  final PluginAnnouncement? announcement;
   final Map<String, String> headers;
   final PluginEndpoint search;
   final PluginEndpoint? detail;
   final Map<String, String> fields;
   final Map<String, String> fileFields;
   final Map<String, String> defaults;
+
+  JsonSourcePlugin copyWith({Uri? baseUrl}) {
+    return JsonSourcePlugin(
+      schemaVersion: schemaVersion,
+      id: id,
+      name: name,
+      enabled: enabled,
+      baseUrl: baseUrl ?? this.baseUrl,
+      capabilities: capabilities,
+      announcement: announcement,
+      headers: headers,
+      search: search,
+      detail: detail,
+      fields: fields,
+      fileFields: fileFields,
+      defaults: defaults,
+    );
+  }
 
   factory JsonSourcePlugin.fromJson(Map<String, Object?> json) {
     final Object? searchJson = json['search'];
@@ -44,13 +65,26 @@ class JsonSourcePlugin {
     }
 
     final Object? detailJson = json['detail'];
+    final Object? announcementJson = json['announcement'];
+    final PluginAnnouncement? announcement =
+        announcementJson is Map<String, Object?>
+        ? PluginAnnouncement.fromJson(announcementJson)
+        : null;
+
+    // baseUrl is optional when announcement is enabled
+    final String baseUrlString = _stringValue(json['baseUrl']);
+    final Uri baseUrl = baseUrlString.isEmpty
+        ? Uri.parse('https://placeholder.local')
+        : Uri.parse(baseUrlString);
+
     return JsonSourcePlugin(
       schemaVersion: _intValue(json['schemaVersion'], 1),
       id: _stringValue(json['id']),
       name: _stringValue(json['name']),
       enabled: _boolValue(json['enabled'], true),
-      baseUrl: Uri.parse(_stringValue(json['baseUrl'])),
+      baseUrl: baseUrl,
       capabilities: PluginCapabilities.fromJson(json['capabilities']),
+      announcement: announcement,
       headers: _stringMap(json['headers']),
       search: PluginEndpoint.fromJson(searchJson),
       detail: detailJson is Map<String, Object?>
@@ -69,45 +103,51 @@ class JsonSourcePlugin {
     Map<String, String> extraHeaders = const <String, String>{},
   }) async {
     final http.Client httpClient = client ?? http.Client();
-    final http.Response response = await _get(
-      httpClient,
-      search,
-      _variablesForSearch(query: query, page: page),
-      extraHeaders,
-    );
-    _throwIfHumanVerification(response);
-    if (response.statusCode != 200) {
-      throw PluginException('$name 搜索失败：HTTP ${response.statusCode}');
+    try {
+      final http.Response response = await _get(
+        httpClient,
+        search,
+        _variablesForSearch(query: query, page: page),
+        extraHeaders,
+      );
+      _throwIfHumanVerification(response);
+      if (response.statusCode != 200) {
+        throw PluginException('$name 搜索失败：HTTP ${response.statusCode}');
+      }
+
+      if (search.isHtml) {
+        return parseSearchHtml(response.body, page: page);
+      }
+
+      final Object? decoded = jsonDecode(response.body);
+      final Object? itemsValue = _valueAt(decoded, search.itemsPath);
+      if (itemsValue is! List<Object?>) {
+        throw PluginException('$name 搜索返回缺少列表：${search.itemsPath}');
+      }
+
+      final int total = _intValue(_valueAt(decoded, search.totalPath));
+      final int currentPage = _intValue(
+        _valueAt(decoded, search.currentPagePath),
+        page,
+      );
+      final int lastPage = search.lastPagePath.isNotEmpty
+          ? _intValue(_valueAt(decoded, search.lastPagePath), page)
+          : _lastPageFromTotal(total, search.pageSize);
+
+      return PluginSearchResult(
+        items: itemsValue
+            .whereType<Map<String, Object?>>()
+            .map((Map<String, Object?> item) => _itemFromJson(item))
+            .toList(growable: false),
+        currentPage: currentPage <= 0 ? page : currentPage,
+        lastPage: lastPage <= 0 ? page : lastPage,
+        total: total,
+      );
+    } finally {
+      if (client == null) {
+        httpClient.close();
+      }
     }
-
-    if (search.isHtml) {
-      return parseSearchHtml(response.body, page: page);
-    }
-
-    final Object? decoded = jsonDecode(response.body);
-    final Object? itemsValue = _valueAt(decoded, search.itemsPath);
-    if (itemsValue is! List<Object?>) {
-      throw PluginException('$name 搜索返回缺少列表：${search.itemsPath}');
-    }
-
-    final int total = _intValue(_valueAt(decoded, search.totalPath));
-    final int currentPage = _intValue(
-      _valueAt(decoded, search.currentPagePath),
-      page,
-    );
-    final int lastPage = search.lastPagePath.isNotEmpty
-        ? _intValue(_valueAt(decoded, search.lastPagePath), page)
-        : _lastPageFromTotal(total, search.pageSize);
-
-    return PluginSearchResult(
-      items: itemsValue
-          .whereType<Map<String, Object?>>()
-          .map((Map<String, Object?> item) => _itemFromJson(item))
-          .toList(growable: false),
-      currentPage: currentPage <= 0 ? page : currentPage,
-      lastPage: lastPage <= 0 ? page : lastPage,
-      total: total,
-    );
   }
 
   PluginSearchResult parseSearchHtml(String html, {required int page}) {
@@ -145,41 +185,47 @@ class JsonSourcePlugin {
     }
 
     final http.Client httpClient = client ?? http.Client();
-    final http.Response response = await _get(
-      httpClient,
-      endpoint,
-      _variablesForItem(item),
-      extraHeaders,
-    );
-    _throwIfHumanVerification(response);
-    if (response.statusCode != 200) {
-      throw PluginException('$name 详情失败：HTTP ${response.statusCode}');
-    }
+    try {
+      final http.Response response = await _get(
+        httpClient,
+        endpoint,
+        _variablesForItem(item),
+        extraHeaders,
+      );
+      _throwIfHumanVerification(response);
+      if (response.statusCode != 200) {
+        throw PluginException('$name 详情失败：HTTP ${response.statusCode}');
+      }
 
-    if (endpoint.isHtml) {
-      return parseDetailHtml(item, response.body);
-    }
+      if (endpoint.isHtml) {
+        return parseDetailHtml(item, response.body);
+      }
 
-    final Object? decoded = jsonDecode(response.body);
-    final Object? root = endpoint.rootPath.isEmpty
-        ? decoded
-        : _valueAt(decoded, endpoint.rootPath);
-    if (root is! Map<String, Object?>) {
-      throw PluginException('$name 详情返回格式异常');
-    }
+      final Object? decoded = jsonDecode(response.body);
+      final Object? root = endpoint.rootPath.isEmpty
+          ? decoded
+          : _valueAt(decoded, endpoint.rootPath);
+      if (root is! Map<String, Object?>) {
+        throw PluginException('$name 详情返回格式异常');
+      }
 
-    final MagnetItem merged = _itemFromJson(root, fallback: item);
-    final Object? filesValue = _valueAt(root, endpoint.filesPath);
-    if (filesValue is! List<Object?>) {
-      return merged;
-    }
+      final MagnetItem merged = _itemFromJson(root, fallback: item);
+      final Object? filesValue = _valueAt(root, endpoint.filesPath);
+      if (filesValue is! List<Object?>) {
+        return merged;
+      }
 
-    return merged.copyWith(
-      files: filesValue
-          .whereType<Map<String, Object?>>()
-          .map(_fileFromJson)
-          .toList(growable: false),
-    );
+      return merged.copyWith(
+        files: filesValue
+            .whereType<Map<String, Object?>>()
+            .map(_fileFromJson)
+            .toList(growable: false),
+      );
+    } finally {
+      if (client == null) {
+        httpClient.close();
+      }
+    }
   }
 
   MagnetItem parseDetailHtml(MagnetItem item, String html) {
@@ -219,6 +265,7 @@ class JsonSourcePlugin {
         ? variables['sourceItemId']!
         : infoHash;
     variables['sourceItemId'] = sourceItemId;
+    variables.addAll(_encodedVariables(variables));
 
     return MagnetItem(
       pluginId: id,
@@ -393,12 +440,13 @@ class JsonSourcePlugin {
   }
 
   Map<String, String> _variablesForItem(MagnetItem item) {
-    return <String, String>{
+    final Map<String, String> variables = <String, String>{
       'sourceItemId': item.sourceItemId,
       'infoHash': item.infoHash,
       'infoHashLower': item.infoHash.toLowerCase(),
       'infoHashUpper': item.infoHash.toUpperCase(),
     };
+    return <String, String>{...variables, ..._encodedVariables(variables)};
   }
 
   Map<String, String> _variablesForSearch({
@@ -407,7 +455,8 @@ class JsonSourcePlugin {
   }) {
     final int page0 = page > 0 ? page - 1 : 0;
     return <String, String>{
-      'query': query,
+      'query': Uri.encodeComponent(query),
+      'queryRaw': query,
       'queryBase64': _base64NoPadding(query),
       'page': page.toString(),
       'page0': page0.toString(),
@@ -450,6 +499,64 @@ class PluginCapabilities {
     }
     return PluginCapabilities(
       requiresHumanVerification: _boolValue(json['requiresHumanVerification']),
+    );
+  }
+}
+
+class PluginAnnouncement {
+  const PluginAnnouncement({
+    required this.enabled,
+    required this.url,
+    required this.urlPattern,
+    required this.urlDecoding,
+    required this.targetPattern,
+    required this.steps,
+  });
+
+  final bool enabled;
+  final String url;
+  final String urlPattern;
+  final String urlDecoding;
+  final String targetPattern;
+  final List<PluginAnnouncementStep> steps;
+
+  factory PluginAnnouncement.fromJson(Map<String, Object?> json) {
+    return PluginAnnouncement(
+      enabled: _boolValue(json['enabled']),
+      url: _stringValue(json['url']),
+      urlPattern: _stringValue(json['urlPattern']),
+      urlDecoding: _stringValue(json['urlDecoding'], 'none'),
+      targetPattern: _stringValue(json['targetPattern']),
+      steps: _announcementStepsFromJson(json['steps']),
+    );
+  }
+}
+
+class PluginAnnouncementStep {
+  const PluginAnnouncementStep({
+    required this.url,
+    required this.urlPattern,
+    required this.urlDecoding,
+    required this.targetPattern,
+  });
+
+  final String url;
+  final String urlPattern;
+  final String urlDecoding;
+  final String targetPattern;
+
+  factory PluginAnnouncementStep.fromJson(Map<String, Object?> json) {
+    return PluginAnnouncementStep(
+      url: _stringValue(json['url']),
+      urlPattern: _stringValue(
+        json['urlPattern'],
+        _stringValue(json['extract']),
+      ),
+      urlDecoding: _stringValue(
+        json['urlDecoding'],
+        _stringValue(json['decode'], 'none'),
+      ),
+      targetPattern: _stringValue(json['targetPattern']),
     );
   }
 }
@@ -519,11 +626,25 @@ class PluginEndpoint {
 }
 
 class JsonPluginRegistry {
-  JsonPluginRegistry({http.Client? client})
-    : _client = client ?? _createDefaultHttpClient();
+  factory JsonPluginRegistry({http.Client? client}) {
+    final http.Client resolvedClient = client ?? _createDefaultHttpClient();
+    return JsonPluginRegistry._(
+      client: resolvedClient,
+      resolver: AnnouncementResolver(client: resolvedClient),
+    );
+  }
+
+  JsonPluginRegistry._({
+    required http.Client client,
+    required AnnouncementResolver resolver,
+  }) : _client = client,
+       _resolver = resolver;
 
   final http.Client _client;
+  final AnnouncementResolver _resolver;
   final Map<String, String> _cookiesByHost = <String, String>{};
+  final Map<String, PluginRuntimeState> _states =
+      <String, PluginRuntimeState>{};
 
   Future<List<JsonSourcePlugin>> loadInstalledPlugins() async {
     final Directory directory = await pluginsDirectory();
@@ -560,6 +681,11 @@ class JsonPluginRegistry {
   }) async {
     final JsonSourcePlugin plugin = parsePluginJson(raw);
     final Directory directory = await pluginsDirectory();
+    final File file = _pluginFile(directory, plugin.id);
+    final bool isFirstInstall = replacingId == null && !await file.exists();
+    if (isFirstInstall) {
+      await _checkAnnouncementForFirstInstall(plugin);
+    }
     if (replacingId != null &&
         replacingId.isNotEmpty &&
         replacingId != plugin.id) {
@@ -568,9 +694,25 @@ class JsonPluginRegistry {
         await previous.delete();
       }
     }
-    final File file = _pluginFile(directory, plugin.id);
     await file.writeAsString(_prettyPluginJson(raw));
     return plugin;
+  }
+
+  Future<String?> checkAnnouncement(JsonSourcePlugin plugin) {
+    return refreshAnnouncementUrl(plugin);
+  }
+
+  Future<void> _checkAnnouncementForFirstInstall(
+    JsonSourcePlugin plugin,
+  ) async {
+    if (plugin.announcement == null || !plugin.announcement!.enabled) {
+      return;
+    }
+    try {
+      await refreshAnnouncementUrl(plugin);
+    } on Object catch (error) {
+      throw PluginException('首次安装需要先通过发布页获取地址：$error');
+    }
   }
 
   Future<void> deletePlugin(String pluginId) async {
@@ -594,20 +736,151 @@ class JsonPluginRegistry {
     JsonSourcePlugin plugin, {
     required String query,
     required int page,
+  }) async {
+    _log('搜索', '开始搜索 - 插件: ${plugin.name}, 关键词: $query, 页码: $page');
+    final PluginRuntimeState state = _getOrCreateState(plugin.id);
+    final Uri effectiveBaseUrl = await _getEffectiveBaseUrl(plugin, state);
+    _log('搜索', '使用地址: $effectiveBaseUrl');
+
+    try {
+      final PluginSearchResult result = await _runSearchWithBaseUrl(
+        plugin,
+        effectiveBaseUrl,
+        query: query,
+        page: page,
+      );
+      _log('搜索', '搜索成功 - 结果数: ${result.items.length}');
+      state.lastSuccessfulSearch = DateTime.now();
+      state.consecutiveFailures = 0;
+      return result;
+    } on PluginHumanVerificationException {
+      rethrow;
+    } on Object catch (error) {
+      state.consecutiveFailures++;
+      _log('搜索', '搜索失败 - 连续失败次数: ${state.consecutiveFailures}');
+
+      if (plugin.announcement != null && plugin.announcement!.enabled) {
+        _log('搜索', '尝试从发布页重新获取地址...');
+        try {
+          final String newBaseUrl = await _resolver.resolveBaseUrl(
+            plugin.announcement!,
+          );
+          _log('搜索', '重新获取地址成功: $newBaseUrl');
+          state.resolvedBaseUrl = newBaseUrl;
+          state.lastAnnouncementCheck = DateTime.now();
+
+          // Retry search with new baseUrl
+          final PluginSearchResult result = await _runSearchWithBaseUrl(
+            plugin,
+            Uri.parse(newBaseUrl),
+            query: query,
+            page: page,
+          );
+          _log('搜索', '重试搜索成功 - 结果数: ${result.items.length}');
+          state.lastSuccessfulSearch = DateTime.now();
+          state.consecutiveFailures = 0;
+          return result;
+        } on Object catch (e) {
+          _log('搜索', '重试失败: $e');
+          throw PluginException('${plugin.name} 搜索失败：$error；发布页刷新/重试失败：$e');
+        }
+      }
+
+      rethrow;
+    }
+  }
+
+  Future<PluginSearchResult> _runSearchWithBaseUrl(
+    JsonSourcePlugin plugin,
+    Uri baseUrl, {
+    required String query,
+    required int page,
   }) {
-    return plugin.runSearch(
+    final JsonSourcePlugin effectivePlugin = plugin.copyWith(baseUrl: baseUrl);
+
+    return effectivePlugin.runSearch(
       query: query,
       page: page,
       client: _client,
-      extraHeaders: _extraHeadersFor(plugin),
+      extraHeaders: _extraHeadersFor(effectivePlugin),
     );
   }
 
-  Future<MagnetItem> details(JsonSourcePlugin plugin, MagnetItem item) {
-    return plugin.runDetail(
+  Future<Uri> _getEffectiveBaseUrl(
+    JsonSourcePlugin plugin,
+    PluginRuntimeState state,
+  ) async {
+    // If we have a resolved baseUrl from announcement, use it
+    if (state.resolvedBaseUrl != null && state.resolvedBaseUrl!.isNotEmpty) {
+      _log('发布页', '使用缓存的地址: ${state.resolvedBaseUrl}');
+      return Uri.parse(state.resolvedBaseUrl!);
+    }
+
+    // If announcement is enabled, check it on first use
+    if (plugin.announcement != null && plugin.announcement!.enabled) {
+      _log('发布页', '开始从发布页获取地址: ${plugin.announcement!.url}');
+      try {
+        final String newBaseUrl = await _resolver.resolveBaseUrl(
+          plugin.announcement!,
+        );
+        _log('发布页', '成功获取地址: $newBaseUrl');
+        state.resolvedBaseUrl = newBaseUrl;
+        state.lastAnnouncementCheck = DateTime.now();
+        return Uri.parse(newBaseUrl);
+      } on Object catch (e) {
+        _log('发布页', '获取地址失败: $e');
+        // If we have no fallback baseUrl, rethrow
+        if (plugin.baseUrl.host == 'placeholder.local') {
+          rethrow;
+        }
+        // Otherwise fall back to plugin's baseUrl
+        _log('发布页', '使用后备地址: ${plugin.baseUrl}');
+      }
+    }
+
+    // Fall back to plugin's baseUrl
+    return plugin.baseUrl;
+  }
+
+  PluginRuntimeState _getOrCreateState(String pluginId) {
+    return _states.putIfAbsent(pluginId, () => PluginRuntimeState());
+  }
+
+  Future<String?> refreshAnnouncementUrl(JsonSourcePlugin plugin) async {
+    if (plugin.announcement == null || !plugin.announcement!.enabled) {
+      return null;
+    }
+
+    try {
+      final String newBaseUrl = await _resolver.resolveBaseUrl(
+        plugin.announcement!,
+      );
+      final PluginRuntimeState state = _getOrCreateState(plugin.id);
+      state.resolvedBaseUrl = newBaseUrl;
+      state.lastAnnouncementCheck = DateTime.now();
+      state.consecutiveFailures = 0;
+      return newBaseUrl;
+    } on Object {
+      rethrow;
+    }
+  }
+
+  String? getResolvedBaseUrl(String pluginId) {
+    return _states[pluginId]?.resolvedBaseUrl;
+  }
+
+  Future<MagnetItem> details(JsonSourcePlugin plugin, MagnetItem item) async {
+    final PluginRuntimeState state = _getOrCreateState(plugin.id);
+    final Uri effectiveBaseUrl = await _getEffectiveBaseUrl(plugin, state);
+
+    final JsonSourcePlugin effectivePlugin = plugin.copyWith(
+      baseUrl: effectiveBaseUrl,
+    );
+
+    return effectivePlugin.runDetail(
       item,
       client: _client,
-      extraHeaders: _extraHeadersFor(plugin),
+      extraHeaders: _extraHeadersFor(effectivePlugin),
     );
   }
 
@@ -616,16 +889,34 @@ class JsonPluginRegistry {
     if (normalized.isEmpty) {
       return;
     }
-    _cookiesByHost[plugin.baseUrl.host] = normalized;
+
+    // Use resolved baseUrl host if available
+    final PluginRuntimeState state = _getOrCreateState(plugin.id);
+    String host = plugin.baseUrl.host;
+    if (state.resolvedBaseUrl != null && state.resolvedBaseUrl!.isNotEmpty) {
+      final Uri? resolvedUri = Uri.tryParse(state.resolvedBaseUrl!);
+      if (resolvedUri != null && resolvedUri.host.isNotEmpty) {
+        host = resolvedUri.host;
+      }
+    }
+
+    _log('Cookie', '保存 Cookie 到 host: $host');
+    _cookiesByHost[host] = normalized;
   }
 
   Map<String, String> _extraHeadersFor(JsonSourcePlugin plugin) {
-    final String? cookie = _cookiesByHost[plugin.baseUrl.host];
+    final String host = plugin.baseUrl.host;
+    final String? cookie = _cookiesByHost[host];
     if (cookie == null || cookie.isEmpty) {
       return const <String, String>{};
     }
+    _log('Cookie', '使用 Cookie for host: $host');
     return <String, String>{'Cookie': cookie};
   }
+}
+
+void _log(String tag, String message) {
+  developer.log(message, name: 'javbus.$tag');
 }
 
 http.Client _createDefaultHttpClient() {
@@ -761,9 +1052,53 @@ JsonSourcePlugin parsePluginJson(String raw) {
   if (plugin.name.trim().isEmpty) {
     throw const PluginException('插件缺少 name');
   }
-  if (!plugin.baseUrl.hasScheme || plugin.baseUrl.host.isEmpty) {
-    throw const PluginException('插件 baseUrl 必须是完整 URL');
+
+  // baseUrl is optional when announcement is enabled
+  final bool hasAnnouncement =
+      plugin.announcement != null && plugin.announcement!.enabled;
+  if (hasAnnouncement) {
+    final PluginAnnouncement announcement = plugin.announcement!;
+    if (announcement.steps.isEmpty) {
+      if (announcement.url.trim().isEmpty) {
+        throw const PluginException('插件 announcement.url 不能为空');
+      }
+      final Uri? announcementUrl = Uri.tryParse(announcement.url);
+      if (announcementUrl == null ||
+          !announcementUrl.hasScheme ||
+          announcementUrl.host.isEmpty) {
+        throw const PluginException('插件 announcement.url 必须是完整 URL');
+      }
+      if (announcement.urlPattern.trim().isEmpty) {
+        throw const PluginException('插件 announcement.urlPattern 不能为空');
+      }
+    } else {
+      for (int index = 0; index < announcement.steps.length; index++) {
+        final PluginAnnouncementStep step = announcement.steps[index];
+        if (index == 0) {
+          if (step.url.trim().isEmpty) {
+            throw const PluginException('插件 announcement.steps[0].url 不能为空');
+          }
+          final Uri? stepUrl = Uri.tryParse(step.url);
+          if (stepUrl == null || !stepUrl.hasScheme || stepUrl.host.isEmpty) {
+            throw PluginException(
+              '插件 announcement.steps[$index].url 必须是完整 URL',
+            );
+          }
+        }
+        if (step.urlPattern.trim().isEmpty) {
+          throw PluginException(
+            '插件 announcement.steps[$index].urlPattern 不能为空',
+          );
+        }
+      }
+    }
   }
+  if (!hasAnnouncement) {
+    if (!plugin.baseUrl.hasScheme || plugin.baseUrl.host.isEmpty) {
+      throw const PluginException('插件 baseUrl 必须是完整 URL');
+    }
+  }
+
   return plugin;
 }
 
@@ -799,27 +1134,37 @@ String _normalizeCookie(String cookie) {
 }
 
 bool _looksLikeHumanVerification(http.Response response) {
-  if (response.statusCode == 403 || response.statusCode == 503) {
-    return true;
-  }
-
   final String body = response.body.toLowerCase();
-  return body.contains('cf-chl') ||
+  final bool hasChallengeMarker =
+      body.contains('cf-chl') ||
       body.contains('challenge-platform') ||
+      body.contains('cf-mitigated') ||
+      body.contains('cf-turnstile') ||
+      body.contains('turnstile') ||
       body.contains('enable javascript and cookies') ||
       body.contains('just a moment') ||
+      body.contains('checking if the site connection is secure') ||
+      (body.contains('cloudflare') && body.contains('challenge'));
+  if (hasChallengeMarker) {
+    return true;
+  }
+  return (response.statusCode == 403 || response.statusCode == 503) &&
       body.contains('cloudflare');
 }
 
 String _applyTemplate(String template, Map<String, String> variables) {
   var result = template;
   for (final MapEntry<String, String> entry in variables.entries) {
-    result = result.replaceAll(
-      '{${entry.key}}',
-      Uri.encodeComponent(entry.value),
-    );
+    result = result.replaceAll('{${entry.key}}', entry.value);
   }
   return result;
+}
+
+Map<String, String> _encodedVariables(Map<String, String> variables) {
+  return variables.map(
+    (String key, String value) =>
+        MapEntry<String, String>('${key}Encoded', Uri.encodeComponent(value)),
+  );
 }
 
 String _base64NoPadding(String value) {
@@ -960,6 +1305,16 @@ Map<String, String> _stringMap(Object? value) {
   );
 }
 
+List<PluginAnnouncementStep> _announcementStepsFromJson(Object? value) {
+  if (value is! List<Object?>) {
+    return const <PluginAnnouncementStep>[];
+  }
+  return value
+      .whereType<Map<String, Object?>>()
+      .map(PluginAnnouncementStep.fromJson)
+      .toList(growable: false);
+}
+
 String _stringValue(Object? value, [String fallback = '']) {
   if (value is String) {
     return value;
@@ -1018,4 +1373,237 @@ int _lastPageFromTotal(int total, int pageSize) {
     return 1;
   }
   return (total / pageSize).ceil();
+}
+
+class PluginRuntimeState {
+  PluginRuntimeState({
+    this.resolvedBaseUrl,
+    this.lastAnnouncementCheck,
+    this.lastSuccessfulSearch,
+    this.consecutiveFailures = 0,
+  });
+
+  String? resolvedBaseUrl;
+  DateTime? lastAnnouncementCheck;
+  DateTime? lastSuccessfulSearch;
+  int consecutiveFailures;
+}
+
+class AnnouncementResolver {
+  const AnnouncementResolver({http.Client? client}) : _client = client;
+
+  final http.Client? _client;
+
+  Future<String> resolveBaseUrl(PluginAnnouncement announcement) async {
+    final http.Client httpClient = _client ?? http.Client();
+    try {
+      if (announcement.steps.isNotEmpty) {
+        return await _resolveSteps(httpClient, announcement.steps);
+      }
+      return await _resolveStep(
+        httpClient,
+        PluginAnnouncementStep(
+          url: announcement.url,
+          urlPattern: announcement.urlPattern,
+          urlDecoding: announcement.urlDecoding,
+          targetPattern: announcement.targetPattern,
+        ),
+        previousUrl: '',
+      );
+    } on TimeoutException {
+      throw PluginException('发布页访问超时：${announcement.url}');
+    } on SocketException catch (error) {
+      throw PluginException('发布页网络连接失败：${error.message}');
+    } on http.ClientException catch (error) {
+      throw PluginException('发布页 HTTP 请求失败：$error');
+    } finally {
+      if (_client == null) {
+        httpClient.close();
+      }
+    }
+  }
+
+  Future<String> _resolveSteps(
+    http.Client httpClient,
+    List<PluginAnnouncementStep> steps,
+  ) async {
+    String previousUrl = '';
+    for (int index = 0; index < steps.length; index++) {
+      previousUrl = await _resolveStep(
+        httpClient,
+        steps[index],
+        previousUrl: previousUrl,
+      );
+    }
+    if (previousUrl.isEmpty) {
+      throw const PluginException('发布页未找到有效地址');
+    }
+    return previousUrl;
+  }
+
+  Future<String> _resolveStep(
+    http.Client httpClient,
+    PluginAnnouncementStep step, {
+    required String previousUrl,
+  }) async {
+    if (step.url.trim().isEmpty && previousUrl.isEmpty) {
+      throw const PluginException('发布页 step.url 不能为空');
+    }
+    final String urlTemplate = step.url.trim().isEmpty ? '{value}' : step.url;
+    final String requestUrl = _applyAnnouncementStepTemplate(
+      urlTemplate,
+      previousUrl,
+    );
+    final Uri? uri = Uri.tryParse(requestUrl);
+    if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
+      throw PluginException('发布页 step.url 必须解析为完整 URL：$requestUrl');
+    }
+
+    final http.Response response = await httpClient
+        .get(uri)
+        .timeout(const Duration(seconds: 15));
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw PluginException('发布页访问失败：HTTP ${response.statusCode}');
+    }
+
+    final List<String> candidates = extractUrls(
+      response.body,
+      step.urlPattern,
+      step.urlDecoding,
+      step.targetPattern,
+    );
+    if (candidates.isEmpty) {
+      throw const PluginException('发布页未找到有效地址');
+    }
+    return candidates.first;
+  }
+
+  List<String> extractUrls(
+    String html,
+    String pattern,
+    String decoding,
+    String targetPattern,
+  ) {
+    if (pattern.isEmpty) {
+      throw const PluginException('发布页 urlPattern 不能为空');
+    }
+
+    final RegExp regex = RegExp(
+      pattern,
+      caseSensitive: false,
+      dotAll: true,
+      multiLine: true,
+    );
+
+    final List<String> preferred = <String>[];
+    final List<String> fallback = <String>[];
+    final Set<String> seen = <String>{};
+    for (final RegExpMatch match in regex.allMatches(html)) {
+      if (match.groupCount < 1) {
+        continue;
+      }
+
+      final String? encoded = match.group(1);
+      if (encoded == null || encoded.trim().isEmpty) {
+        continue;
+      }
+
+      String decoded;
+      try {
+        decoded = _decodeUrl(encoded.trim(), decoding);
+      } on Object {
+        continue;
+      }
+
+      final String? normalized = _normalizeUrl(decoded);
+      if (normalized == null) {
+        continue;
+      }
+      if (!seen.add(normalized)) {
+        continue;
+      }
+
+      if (targetPattern.isNotEmpty) {
+        final String context = _contextAround(html, match.start);
+        if (context.contains(targetPattern)) {
+          preferred.add(normalized);
+        } else {
+          fallback.add(normalized);
+        }
+      } else {
+        fallback.add(normalized);
+      }
+    }
+
+    return <String>[...preferred, ...fallback];
+  }
+
+  String _decodeUrl(String encoded, String decoding) {
+    switch (decoding.toLowerCase()) {
+      case 'base64':
+        return utf8.decode(base64.decode(_padBase64(encoded)));
+      case 'base64url':
+        return utf8.decode(base64Url.decode(_padBase64(encoded)));
+      case 'hex':
+        final List<int> bytes = <int>[];
+        for (int i = 0; i < encoded.length; i += 2) {
+          if (i + 1 < encoded.length) {
+            bytes.add(int.parse(encoded.substring(i, i + 2), radix: 16));
+          }
+        }
+        return utf8.decode(bytes);
+      case 'none':
+      default:
+        return encoded;
+    }
+  }
+
+  String _applyAnnouncementStepTemplate(String template, String previousUrl) {
+    if (previousUrl.isEmpty) {
+      return template;
+    }
+    final Uri? uri = Uri.tryParse(previousUrl);
+    final String origin = uri == null || !uri.hasScheme || uri.host.isEmpty
+        ? previousUrl
+        : '${uri.scheme}://${uri.authority}';
+    return template
+        .replaceAll('{value}', previousUrl)
+        .replaceAll('{url}', previousUrl)
+        .replaceAll('{origin}', origin)
+        .replaceAll('{host}', uri?.host ?? previousUrl);
+  }
+
+  String? _normalizeUrl(String url) {
+    final String trimmed = url.trim();
+    if (trimmed.isEmpty) {
+      return null;
+    }
+    Uri? uri = Uri.tryParse(trimmed);
+    if (uri != null && uri.hasScheme && uri.host.isNotEmpty) {
+      return uri.toString();
+    }
+    if (!RegExp(r'^[a-zA-Z0-9.-]+(?::\d+)?(?:/.*)?$').hasMatch(trimmed) ||
+        !trimmed.contains('.')) {
+      return null;
+    }
+    uri = Uri.tryParse('https://$trimmed');
+    if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
+      return null;
+    }
+    return uri.toString();
+  }
+
+  String _contextAround(String html, int position) {
+    final int start = (position - 500).clamp(0, html.length).toInt();
+    final int end = (position + 500).clamp(0, html.length).toInt();
+    return html.substring(start, end);
+  }
+}
+
+String _padBase64(String value) {
+  final int remainder = value.length % 4;
+  return remainder == 0
+      ? value
+      : value.padRight(value.length + 4 - remainder, '=');
 }

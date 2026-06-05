@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:io';
 import 'dart:ui';
 
@@ -254,6 +255,7 @@ class _PluginSearchPageState extends State<PluginSearchPage> {
         onCreate: _createPlugin,
         onEdit: _editPlugin,
         onDelete: _deletePlugin,
+        onRefreshAnnouncement: _refreshPluginAnnouncement,
         onReload: _loadPlugins,
         onBack: () => setState(() => _showPluginSettings = false),
       );
@@ -877,18 +879,19 @@ class _PluginSearchPageState extends State<PluginSearchPage> {
     if (!_shouldUseVerifiedWebView(plugin) || !plugin.search.isHtml) {
       return null;
     }
+    final JsonSourcePlugin effectivePlugin = _effectivePluginForWebView(plugin);
     final HumanVerificationResult result = await _verifiedSessionFor(
       plugin,
-    ).load(plugin.resolveSearchUrl(query: query, page: page));
+    ).load(effectivePlugin.resolveSearchUrl(query: query, page: page));
     if (!result.hasHtml || _looksLikeChallengeHtml(result.html)) {
-      _verifiedHosts.remove(plugin.baseUrl.host);
+      _verifiedHosts.remove(_getEffectiveHost(plugin));
       return null;
     }
-    final PluginSearchResult parsed = plugin.parseSearchHtml(
+    final PluginSearchResult parsed = effectivePlugin.parseSearchHtml(
       result.html,
       page: page,
     );
-    return parsed.items.isEmpty ? null : parsed;
+    return parsed;
   }
 
   Future<MagnetItem?> _detailsWithVerifiedWebView(
@@ -899,7 +902,8 @@ class _PluginSearchPageState extends State<PluginSearchPage> {
         !(plugin.detail?.isHtml ?? false)) {
       return null;
     }
-    final Uri? url = plugin.resolveDetailUrl(item);
+    final JsonSourcePlugin effectivePlugin = _effectivePluginForWebView(plugin);
+    final Uri? url = effectivePlugin.resolveDetailUrl(item);
     if (url == null) {
       return null;
     }
@@ -907,36 +911,60 @@ class _PluginSearchPageState extends State<PluginSearchPage> {
       plugin,
     ).load(url);
     if (!result.hasHtml || _looksLikeChallengeHtml(result.html)) {
-      _verifiedHosts.remove(plugin.baseUrl.host);
+      _verifiedHosts.remove(_getEffectiveHost(plugin));
       return null;
     }
-    final MagnetItem parsed = plugin.parseDetailHtml(item, result.html);
-    final bool changed =
-        parsed.infoHash.isNotEmpty ||
-        parsed.magnet.isNotEmpty ||
-        parsed.files.isNotEmpty;
-    return changed ? parsed : null;
+    return effectivePlugin.parseDetailHtml(item, result.html);
   }
 
   bool _shouldUseVerifiedWebView(JsonSourcePlugin plugin) {
     return plugin.capabilities.requiresHumanVerification &&
-        _verifiedHosts.contains(plugin.baseUrl.host);
+        _verifiedHosts.contains(_getEffectiveHost(plugin));
   }
 
   VerifiedWebViewSession _verifiedSessionFor(JsonSourcePlugin plugin) {
     return _verifiedSessions.putIfAbsent(
-      plugin.baseUrl.host,
+      _getEffectiveHost(plugin),
       VerifiedWebViewSession.new,
     );
+  }
+
+  String _getEffectiveHost(JsonSourcePlugin plugin) {
+    // Try to get resolved host from registry
+    final String? resolvedUrl = _registry.getResolvedBaseUrl(plugin.id);
+    if (resolvedUrl != null && resolvedUrl.isNotEmpty) {
+      final Uri? uri = Uri.tryParse(resolvedUrl);
+      if (uri != null && uri.host.isNotEmpty) {
+        return uri.host;
+      }
+    }
+    // Fall back to plugin's baseUrl host
+    return plugin.baseUrl.host;
+  }
+
+  JsonSourcePlugin _effectivePluginForWebView(JsonSourcePlugin plugin) {
+    final String? resolvedUrl = _registry.getResolvedBaseUrl(plugin.id);
+    if (resolvedUrl == null || resolvedUrl.isEmpty) {
+      return plugin;
+    }
+    final Uri? uri = Uri.tryParse(resolvedUrl);
+    if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
+      return plugin;
+    }
+    return plugin.copyWith(baseUrl: uri);
   }
 
   bool _looksLikeChallengeHtml(String html) {
     final String body = html.toLowerCase();
     return body.contains('cf-chl') ||
         body.contains('challenge-platform') ||
+        body.contains('cf-mitigated') ||
+        body.contains('cf-turnstile') ||
+        body.contains('turnstile') ||
         body.contains('enable javascript and cookies') ||
         body.contains('just a moment') ||
-        body.contains('cloudflare');
+        body.contains('checking if the site connection is secure') ||
+        (body.contains('cloudflare') && body.contains('challenge'));
   }
 
   Future<HumanVerificationResult?> _handleHumanVerification(
@@ -947,6 +975,7 @@ class _PluginSearchPageState extends State<PluginSearchPage> {
       context: context,
       url: error.verificationUrl,
       pluginName: plugin.name,
+      session: _verifiedSessionFor(plugin),
     );
     if (result == null || (!result.hasCookie && !result.hasHtml)) {
       return null;
@@ -954,12 +983,36 @@ class _PluginSearchPageState extends State<PluginSearchPage> {
     if (result.hasCookie) {
       _registry.setVerificationCookie(plugin, result.cookie);
     }
-    _verifiedHosts.add(plugin.baseUrl.host);
+    final String effectiveHost = _getEffectiveHost(plugin);
+    _verifiedHosts.add(effectiveHost);
+    developer.log('已验证 host: $effectiveHost', name: 'javbus.验证');
     if (mounted) {
       final String suffix = result.hasCookie ? 'Cookie 已保存' : '已读取页面内容';
       _showSnack('${plugin.name} 验证完成，$suffix');
     }
     return result;
+  }
+
+  Future<void> _refreshPluginAnnouncement(JsonSourcePlugin plugin) async {
+    if (plugin.announcement == null || !plugin.announcement!.enabled) {
+      _showSnack('${plugin.name} 没有发布页配置');
+      return;
+    }
+    try {
+      final String? resolved = await _registry.refreshAnnouncementUrl(plugin);
+      if (!mounted) {
+        return;
+      }
+      if (resolved == null || resolved.isEmpty) {
+        _showSnack('${plugin.name} 没有获取到新地址');
+        return;
+      }
+      _showSnack('${plugin.name} 已刷新地址：$resolved');
+    } on Object catch (error) {
+      if (mounted) {
+        _showSnack('${plugin.name} 发布页刷新失败：$error');
+      }
+    }
   }
 
   Future<void> _installPlugin() async {
@@ -1365,6 +1418,7 @@ class _PluginsSection extends StatelessWidget {
     required this.onCreate,
     required this.onEdit,
     required this.onDelete,
+    required this.onRefreshAnnouncement,
     required this.onReload,
     required this.onBack,
   });
@@ -1379,6 +1433,7 @@ class _PluginsSection extends StatelessWidget {
   final VoidCallback onCreate;
   final ValueChanged<JsonSourcePlugin> onEdit;
   final ValueChanged<JsonSourcePlugin> onDelete;
+  final ValueChanged<JsonSourcePlugin> onRefreshAnnouncement;
   final VoidCallback onReload;
   final VoidCallback onBack;
 
@@ -1498,6 +1553,7 @@ class _PluginsSection extends StatelessWidget {
                 onTap: () => onSelect(plugin),
                 onEdit: () => onEdit(plugin),
                 onDelete: () => onDelete(plugin),
+                onRefreshAnnouncement: () => onRefreshAnnouncement(plugin),
               );
             },
             separatorBuilder: (_, __) => const SizedBox(height: 10),
@@ -1902,6 +1958,8 @@ String _pluginToJson(JsonSourcePlugin plugin) {
       'requiresHumanVerification':
           plugin.capabilities.requiresHumanVerification,
     },
+    if (plugin.announcement != null)
+      'announcement': _announcementToJson(plugin.announcement!),
     'headers': plugin.headers,
     'search': _endpointToJson(plugin.search),
     if (plugin.detail != null) 'detail': _endpointToJson(plugin.detail!),
@@ -1910,6 +1968,32 @@ String _pluginToJson(JsonSourcePlugin plugin) {
     'defaults': plugin.defaults,
   };
   return const JsonEncoder.withIndent('  ').convert(json);
+}
+
+Map<String, Object?> _announcementToJson(PluginAnnouncement announcement) {
+  return <String, Object?>{
+    'enabled': announcement.enabled,
+    if (announcement.steps.isNotEmpty)
+      'steps': announcement.steps
+          .map(_announcementStepToJson)
+          .toList(growable: false)
+    else ...<String, Object?>{
+      'url': announcement.url,
+      'urlPattern': announcement.urlPattern,
+      'urlDecoding': announcement.urlDecoding,
+      if (announcement.targetPattern.isNotEmpty)
+        'targetPattern': announcement.targetPattern,
+    },
+  };
+}
+
+Map<String, Object?> _announcementStepToJson(PluginAnnouncementStep step) {
+  return <String, Object?>{
+    'url': step.url,
+    'urlPattern': step.urlPattern,
+    'urlDecoding': step.urlDecoding,
+    if (step.targetPattern.isNotEmpty) 'targetPattern': step.targetPattern,
+  };
 }
 
 Map<String, Object?> _endpointToJson(PluginEndpoint endpoint) {
@@ -2785,6 +2869,7 @@ class _PluginCard extends StatelessWidget {
     required this.onTap,
     required this.onEdit,
     required this.onDelete,
+    required this.onRefreshAnnouncement,
   });
 
   final JsonSourcePlugin plugin;
@@ -2792,9 +2877,15 @@ class _PluginCard extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
+  final VoidCallback onRefreshAnnouncement;
 
   @override
   Widget build(BuildContext context) {
+    final bool hasAnnouncement =
+        plugin.announcement != null && plugin.announcement!.enabled;
+    final String announcementUrl = hasAnnouncement
+        ? _displayAnnouncementUrl(plugin.announcement!)
+        : '';
     return _ToolSurface(
       padding: EdgeInsets.zero,
       child: Material(
@@ -2840,10 +2931,39 @@ class _PluginCard extends StatelessWidget {
                           fontSize: 12,
                         ),
                       ),
+                      if (hasAnnouncement) ...<Widget>[
+                        const SizedBox(height: 6),
+                        Text(
+                          '发布页：$announcementUrl',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: AppTheme.text3(context),
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
                 const SizedBox(width: 12),
+                if (hasAnnouncement)
+                  Tooltip(
+                    message: '刷新发布页地址',
+                    child: IconButton(
+                      onPressed: onRefreshAnnouncement,
+                      icon: const Icon(Icons.travel_explore_rounded, size: 18),
+                      color: AppTheme.text2(context),
+                      style: IconButton.styleFrom(
+                        fixedSize: const Size(36, 36),
+                        minimumSize: const Size(36, 36),
+                        padding: EdgeInsets.zero,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ),
                 Tooltip(
                   message: '编辑插件',
                   child: IconButton(
@@ -2895,6 +3015,15 @@ class _PluginCard extends StatelessWidget {
       ),
     );
   }
+}
+
+String _displayAnnouncementUrl(PluginAnnouncement announcement) {
+  if (announcement.steps.isNotEmpty) {
+    final String firstStepUrl = announcement.steps.first.url.trim();
+    return firstStepUrl.isEmpty ? '未配置' : firstStepUrl;
+  }
+  final String url = announcement.url.trim();
+  return url.isEmpty ? '未配置' : url;
 }
 
 class _SettingTile extends StatelessWidget {

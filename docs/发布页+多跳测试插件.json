@@ -1,0 +1,52 @@
+{
+  "_comment": "搜番发布页多跳适配草案。当前发布页链路可静态解析：sefan.vip 解出 ok.sofan.in，ok.sofan.in 再暴露 host2=to.sofan1.cc。实际搜索结果仍在 to.sofan1.cc 的 iframe 后端中，当前 JSON 插件协议不做 iframe 拼接和 JS 渲染，因此此文件先作为发布页多跳协议测试样例，不建议直接作为可用搜索源安装。",
+  "schemaVersion": 1,
+  "id": "sefan",
+  "name": "搜番",
+  "enabled": true,
+  "baseUrl": "",
+  "announcement": {
+    "enabled": true,
+    "steps": [
+      {
+        "url": "https://sefan.vip/",
+        "urlPattern": "var\\s+spans='([^']+)'",
+        "urlDecoding": "base64",
+        "targetPattern": "搜番"
+      },
+      {
+        "urlPattern": "host2\\s*=\\s*'([^']+)'",
+        "urlDecoding": "none"
+      }
+    ]
+  },
+  "capabilities": {
+    "requiresHumanVerification": false
+  },
+  "headers": {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+  },
+  "search": {
+    "_comment": "占位搜索配置。发布页多跳最终可得到 to.sofan1.cc，但搜索结果正文仍由 iframe 加载，不会在壳页面直接返回；需要拿到稳定直出的 HTML/API 后再补 itemPattern。",
+    "method": "GET",
+    "url": "/?word={query}",
+    "responseType": "html",
+    "itemPattern": "",
+    "pageSize": 20
+  },
+  "fields": {
+    "sourceItemId": "sourceItemId",
+    "title": "title",
+    "infoHash": "infoHash",
+    "magnet": "magnet",
+    "humanSize": "humanSize",
+    "seeders": "seeders",
+    "webUrl": "webUrl"
+  },
+  "fileFields": {},
+  "defaults": {
+    "magnet": "magnet:?xt=urn:btih:{infoHashUpper}",
+    "webUrl": "{sourceItemId}"
+  }
+}

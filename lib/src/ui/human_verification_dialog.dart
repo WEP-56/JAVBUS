@@ -32,14 +32,32 @@ class VerifiedWebViewSession {
   final List<StreamSubscription<Object?>> _subscriptions =
       <StreamSubscription<Object?>>[];
   final List<Completer<void>> _loadWaiters = <Completer<void>>[];
+  final List<VoidCallback> _listeners = <VoidCallback>[];
   String _currentUrl = '';
   bool _initialized = false;
+  bool _initializing = false;
+  bool _loading = false;
+  String? _error;
+
+  String get currentUrl => _currentUrl;
+  bool get initializing => _initializing;
+  bool get loading => _loading || _initializing;
+  String? get error => _error;
+
+  void addListener(VoidCallback listener) {
+    _listeners.add(listener);
+  }
+
+  void removeListener(VoidCallback listener) {
+    _listeners.remove(listener);
+  }
 
   Future<HumanVerificationResult> load(Uri url) async {
     await _ensureInitialized();
 
     final Completer<void> waiter = Completer<void>();
     _loadWaiters.add(waiter);
+    _setLoading(true);
     if (Platform.isWindows) {
       await _windowsController?.loadUrl(url.toString());
     } else {
@@ -56,6 +74,39 @@ class VerifiedWebViewSession {
     );
   }
 
+  Future<void> reload() async {
+    if (Platform.isWindows) {
+      await _windowsController?.reload();
+    } else {
+      await _androidController?.reload();
+    }
+  }
+
+  void openDevTools() {
+    if (Platform.isWindows) {
+      _windowsController?.openDevTools();
+    }
+  }
+
+  Future<String?> readCookie() => _readCookie();
+
+  Future<String?> readPageHtml() => _readPageHtml();
+
+  Widget buildWebView() {
+    if (Platform.isWindows) {
+      final win.WebviewController? controller = _windowsController;
+      if (controller == null) {
+        return const SizedBox.shrink();
+      }
+      return win.Webview(controller);
+    }
+    final WebViewController? controller = _androidController;
+    if (controller == null) {
+      return const SizedBox.shrink();
+    }
+    return WebViewWidget(controller: controller);
+  }
+
   Future<void> dispose() async {
     for (final StreamSubscription<Object?> subscription in _subscriptions) {
       await subscription.cancel();
@@ -65,43 +116,86 @@ class VerifiedWebViewSession {
     _windowsController = null;
     _androidController = null;
     _initialized = false;
+    _initializing = false;
+    _loading = false;
+    _error = null;
+    notifyListeners();
   }
 
   Future<void> _ensureInitialized() async {
     if (_initialized) {
       return;
     }
-    if (Platform.isWindows) {
-      final win.WebviewController controller = win.WebviewController();
-      _windowsController = controller;
-      await controller.initialize();
-      _subscriptions.add(
-        controller.url.listen((String url) => _currentUrl = url),
-      );
-      _subscriptions.add(
-        controller.loadingState.listen((win.LoadingState state) {
-          if (state != win.LoadingState.loading) {
-            _completeLoadWaiters();
-          }
-        }),
-      );
-      await controller.setUserAgent(_desktopUserAgent);
-      await controller.setPopupWindowPolicy(win.WebviewPopupWindowPolicy.deny);
-    } else {
-      final WebViewController controller = WebViewController()
-        ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setNavigationDelegate(
-          NavigationDelegate(
-            onPageStarted: (String url) => _currentUrl = url,
-            onPageFinished: (String url) {
-              _currentUrl = url;
-              _completeLoadWaiters();
-            },
-          ),
+    _initializing = true;
+    _error = null;
+    notifyListeners();
+    try {
+      if (Platform.isWindows) {
+        final win.WebviewController controller = win.WebviewController();
+        _windowsController = controller;
+        await controller.initialize();
+        _subscriptions.add(
+          controller.url.listen((String url) {
+            _currentUrl = url;
+            notifyListeners();
+          }),
         );
-      _androidController = controller;
+        _subscriptions.add(
+          controller.loadingState.listen((win.LoadingState state) {
+            _setLoading(state == win.LoadingState.loading);
+            if (state != win.LoadingState.loading) {
+              _completeLoadWaiters();
+            }
+          }),
+        );
+        await controller.setUserAgent(_desktopUserAgent);
+        await controller.setPopupWindowPolicy(
+          win.WebviewPopupWindowPolicy.deny,
+        );
+      } else {
+        final WebViewController controller = WebViewController()
+          ..setJavaScriptMode(JavaScriptMode.unrestricted)
+          ..setNavigationDelegate(
+            NavigationDelegate(
+              onPageStarted: (String url) {
+                _currentUrl = url;
+                _setLoading(true);
+              },
+              onPageFinished: (String url) {
+                _currentUrl = url;
+                _setLoading(false);
+                _completeLoadWaiters();
+              },
+              onWebResourceError: (WebResourceError error) {
+                _error = error.description;
+                notifyListeners();
+              },
+            ),
+          );
+        _androidController = controller;
+      }
+      _initialized = true;
+    } on Object catch (error) {
+      _error = error.toString();
+      rethrow;
+    } finally {
+      _initializing = false;
+      notifyListeners();
     }
-    _initialized = true;
+  }
+
+  void _setLoading(bool value) {
+    if (_loading == value) {
+      return;
+    }
+    _loading = value;
+    notifyListeners();
+  }
+
+  void notifyListeners() {
+    for (final VoidCallback listener in List<VoidCallback>.from(_listeners)) {
+      listener();
+    }
   }
 
   void _completeLoadWaiters() {
@@ -145,12 +239,17 @@ Future<HumanVerificationResult?> showHumanVerificationDialog({
   required BuildContext context,
   required Uri url,
   required String pluginName,
+  VerifiedWebViewSession? session,
 }) {
   return showDialog<HumanVerificationResult>(
     context: context,
     barrierDismissible: false,
     builder: (BuildContext context) {
-      return _HumanVerificationDialog(url: url, pluginName: pluginName);
+      return _HumanVerificationDialog(
+        url: url,
+        pluginName: pluginName,
+        session: session,
+      );
     },
   );
 }
@@ -176,10 +275,15 @@ String? _jsString(Object? value) {
 }
 
 class _HumanVerificationDialog extends StatefulWidget {
-  const _HumanVerificationDialog({required this.url, required this.pluginName});
+  const _HumanVerificationDialog({
+    required this.url,
+    required this.pluginName,
+    required this.session,
+  });
 
   final Uri url;
   final String pluginName;
+  final VerifiedWebViewSession? session;
 
   @override
   State<_HumanVerificationDialog> createState() =>
@@ -187,107 +291,56 @@ class _HumanVerificationDialog extends StatefulWidget {
 }
 
 class _HumanVerificationDialogState extends State<_HumanVerificationDialog> {
-  win.WebviewController? _windowsController;
-  WebViewController? _androidController;
-  final List<StreamSubscription<Object?>> _subscriptions =
-      <StreamSubscription<Object?>>[];
-  bool _initializing = true;
-  bool _loading = true;
-  String? _error;
-  String _currentUrl = '';
+  late final VerifiedWebViewSession _session;
+  late final bool _ownsSession;
 
   @override
   void initState() {
     super.initState();
-    _currentUrl = widget.url.toString();
-    _initWebView();
+    _ownsSession = widget.session == null;
+    _session = widget.session ?? VerifiedWebViewSession();
+    _session.addListener(_onSessionChanged);
+    _load();
   }
 
   @override
   void dispose() {
-    for (final StreamSubscription<Object?> subscription in _subscriptions) {
-      subscription.cancel();
+    _session.removeListener(_onSessionChanged);
+    if (_ownsSession) {
+      unawaited(_session.dispose());
     }
-    _windowsController?.dispose();
     super.dispose();
   }
 
-  Future<void> _initWebView() async {
+  void _onSessionChanged() {
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<void> _load() async {
     try {
-      if (Platform.isWindows) {
-        final win.WebviewController controller = win.WebviewController();
-        _windowsController = controller;
-        await controller.initialize();
-        _subscriptions.add(
-          controller.url.listen((String url) {
-            if (mounted) {
-              setState(() => _currentUrl = url);
-            }
-          }),
-        );
-        _subscriptions.add(
-          controller.loadingState.listen((win.LoadingState state) {
-            if (mounted) {
-              setState(() => _loading = state == win.LoadingState.loading);
-            }
-          }),
-        );
-        await controller.setUserAgent(
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-          '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        );
-        await controller.setPopupWindowPolicy(
-          win.WebviewPopupWindowPolicy.deny,
-        );
-        await controller.loadUrl(widget.url.toString());
-      } else {
-        final WebViewController controller = WebViewController()
-          ..setJavaScriptMode(JavaScriptMode.unrestricted)
-          ..setNavigationDelegate(
-            NavigationDelegate(
-              onPageStarted: (String url) {
-                setState(() {
-                  _currentUrl = url;
-                  _loading = true;
-                });
-              },
-              onPageFinished: (String url) {
-                setState(() {
-                  _currentUrl = url;
-                  _loading = false;
-                });
-              },
-              onWebResourceError: (WebResourceError error) {
-                setState(() => _error = error.description);
-              },
-            ),
-          )
-          ..loadRequest(widget.url);
-        _androidController = controller;
-      }
-      if (mounted) {
-        setState(() => _initializing = false);
-      }
+      await _session.load(widget.url);
     } on PlatformException catch (error) {
       if (mounted) {
-        setState(() {
-          _initializing = false;
-          _error = '${error.code}: ${error.message ?? error.details ?? ''}';
-        });
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            appSnack('${error.code}: ${error.message ?? error.details ?? ''}'),
+          );
       }
     } on Object catch (error) {
       if (mounted) {
-        setState(() {
-          _initializing = false;
-          _error = error.toString();
-        });
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(appSnack(error.toString()));
       }
     }
   }
 
   Future<void> _finish() async {
-    final String? cookie = await _readCookie();
-    final String? html = await _readPageHtml();
+    final String? cookie = await _session.readCookie();
+    final String? html = await _session.readPageHtml();
     if (!mounted) {
       return;
     }
@@ -302,49 +355,9 @@ class _HumanVerificationDialogState extends State<_HumanVerificationDialog> {
       HumanVerificationResult(
         cookie: cookie ?? '',
         html: html ?? '',
-        url: Uri.tryParse(_currentUrl),
+        url: Uri.tryParse(_session.currentUrl),
       ),
     );
-  }
-
-  Future<String?> _readCookie() async {
-    if (Platform.isWindows) {
-      final Object? value = await _windowsController?.executeScript(
-        'document.cookie',
-      );
-      return _jsString(value);
-    }
-    final Object? value = await _androidController
-        ?.runJavaScriptReturningResult('document.cookie');
-    return _jsString(value);
-  }
-
-  Future<String?> _readPageHtml() async {
-    const String script =
-        'document.documentElement ? document.documentElement.outerHTML : ""';
-    if (Platform.isWindows) {
-      final Object? value = await _windowsController?.executeScript(script);
-      return _jsString(value);
-    }
-    final Object? value = await _androidController
-        ?.runJavaScriptReturningResult(script);
-    return _jsString(value);
-  }
-
-  String? _jsString(Object? value) {
-    if (value == null) {
-      return null;
-    }
-    final String raw = value.toString();
-    if (raw.length >= 2 && raw.startsWith('"') && raw.endsWith('"')) {
-      try {
-        final Object? decoded = jsonDecode(raw);
-        return decoded?.toString();
-      } on FormatException {
-        return raw.substring(1, raw.length - 1);
-      }
-    }
-    return raw;
   }
 
   @override
@@ -363,17 +376,19 @@ class _HumanVerificationDialogState extends State<_HumanVerificationDialog> {
             children: <Widget>[
               _DialogHeader(
                 pluginName: widget.pluginName,
-                currentUrl: _currentUrl,
-                loading: _loading || _initializing,
+                currentUrl: _session.currentUrl.isEmpty
+                    ? widget.url.toString()
+                    : _session.currentUrl,
+                loading: _session.loading,
                 onClose: () => Navigator.of(context).pop(),
               ),
               Expanded(child: _buildBody()),
               _DialogFooter(
                 onReload: _reload,
                 onOpenDevTools: Platform.isWindows
-                    ? () => _windowsController?.openDevTools()
+                    ? () => _session.openDevTools()
                     : null,
-                onFinish: _initializing ? null : _finish,
+                onFinish: _session.initializing ? null : _finish,
               ),
             ],
           ),
@@ -383,38 +398,23 @@ class _HumanVerificationDialogState extends State<_HumanVerificationDialog> {
   }
 
   Widget _buildBody() {
-    if (_initializing) {
+    if (_session.initializing) {
       return const Center(child: CircularProgressIndicator());
     }
-    if (_error != null) {
+    if (_session.error != null) {
       return Padding(
         padding: const EdgeInsets.all(18),
         child: SelectableText(
-          _error!,
+          _session.error!,
           style: TextStyle(color: AppTheme.text2(context)),
         ),
       );
     }
-    if (Platform.isWindows) {
-      final win.WebviewController? controller = _windowsController;
-      if (controller == null) {
-        return const SizedBox.shrink();
-      }
-      return win.Webview(controller);
-    }
-    final WebViewController? controller = _androidController;
-    if (controller == null) {
-      return const SizedBox.shrink();
-    }
-    return WebViewWidget(controller: controller);
+    return _session.buildWebView();
   }
 
   Future<void> _reload() async {
-    if (Platform.isWindows) {
-      await _windowsController?.reload();
-    } else {
-      await _androidController?.reload();
-    }
+    await _session.reload();
   }
 }
 

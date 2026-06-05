@@ -1,0 +1,1010 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JAVBUS JSON 插件协议 v1 文档</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --bg-soft: #f9fafb;
+      --bg-code: #f3f4f6;
+      --bg-mute: #e5e7eb;
+      --text: #1f2937;
+      --text-soft: #4b5563;
+      --text-mute: #9ca3af;
+      --border: #e5e7eb;
+      --brand: #3b82f6;
+      --brand-hover: #2563eb;
+      --shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+
+    [data-theme="dark"] {
+      --bg: #0f172a;
+      --bg-soft: #1e293b;
+      --bg-code: #1e293b;
+      --bg-mute: #334155;
+      --text: #f8fafc;
+      --text-soft: #cbd5e1;
+      --text-mute: #64748b;
+      --border: #334155;
+      --brand: #60a5fa;
+      --brand-hover: #3b82f6;
+      --shadow: 0 1px 3px rgba(0,0,0,0.3);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+      transition: background 0.3s, color 0.3s;
+    }
+
+    /* Header */
+    header {
+      height: 60px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      z-index: 100;
+      backdrop-filter: blur(8px);
+      background: rgba(255, 255, 255, 0.8);
+    }
+
+    [data-theme="dark"] header {
+      background: rgba(15, 23, 42, 0.8);
+    }
+
+    .nav-brand {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .nav-brand span {
+      background: linear-gradient(135deg, var(--brand), #8b5cf6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .nav-actions a {
+      color: var(--text-soft);
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+
+    .nav-actions a:hover {
+      color: var(--brand);
+    }
+
+    #theme-toggle {
+      background: var(--bg-soft);
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      width: 36px;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 1.1rem;
+      transition: all 0.2s;
+    }
+
+    #theme-toggle:hover {
+      background: var(--bg-mute);
+      transform: rotate(15deg);
+    }
+
+    .menu-toggle {
+      display: none;
+      background: none;
+      border: none;
+      font-size: 1.5rem;
+      cursor: pointer;
+      color: var(--text);
+    }
+
+    /* Layout */
+    .wrapper {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      width: 280px;
+      flex-shrink: 0;
+      overflow-y: auto;
+      border-right: 1px solid var(--border);
+      background: var(--bg-soft);
+      padding: 24px 16px;
+      transition: transform 0.3s;
+    }
+
+    .sidebar::-webkit-scrollbar {
+      width: 4px;
+    }
+    .sidebar::-webkit-scrollbar-thumb {
+      background: var(--bg-mute);
+      border-radius: 4px;
+    }
+
+    #toc {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .toc-link {
+      display: block;
+      padding: 6px 12px;
+      color: var(--text-soft);
+      text-decoration: none;
+      font-size: 0.9rem;
+      border-left: 2px solid transparent;
+      border-radius: 0 4px 4px 0;
+      transition: all 0.2s;
+    }
+
+    .toc-link:hover {
+      color: var(--brand);
+      background: var(--bg-mute);
+    }
+
+    .toc-link.active {
+      color: var(--brand);
+      border-left-color: var(--brand);
+      background: rgba(59, 130, 246, 0.1);
+      font-weight: 600;
+    }
+
+    .toc-h3 {
+      padding-left: 28px;
+      font-size: 0.85rem;
+    }
+
+    /* Content */
+    .content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 40px 60px;
+      max-width: 100%;
+      scroll-behavior: smooth;
+    }
+
+    .content::-webkit-scrollbar {
+      width: 8px;
+    }
+    .content::-webkit-scrollbar-thumb {
+      background: var(--bg-mute);
+      border-radius: 4px;
+    }
+
+    .content-inner {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      margin-bottom: 1rem;
+      background: linear-gradient(135deg, var(--brand), #8b5cf6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    h2 {
+      font-size: 1.75rem;
+      margin-top: 3rem;
+      margin-bottom: 1rem;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--border);
+      color: var(--text);
+    }
+
+    h3 {
+      font-size: 1.35rem;
+      margin-top: 2rem;
+      margin-bottom: 0.75rem;
+      color: var(--text);
+    }
+
+    p {
+      margin-bottom: 1rem;
+      color: var(--text-soft);
+    }
+
+    ul, ol {
+      margin-bottom: 1rem;
+      padding-left: 1.5rem;
+      color: var(--text-soft);
+    }
+
+    li {
+      margin-bottom: 0.5rem;
+    }
+
+    strong {
+      color: var(--text);
+      font-weight: 600;
+    }
+
+    a {
+      color: var(--brand);
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+
+    /* Code */
+    p code, li code, td code {
+      background: var(--bg-mute);
+      padding: 0.2rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.85em;
+      color: var(--brand);
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+    }
+
+    pre {
+      background: var(--bg-code);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem;
+      overflow-x: auto;
+      position: relative;
+      margin: 1.5rem 0;
+      box-shadow: var(--shadow);
+    }
+
+    pre code {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+      font-size: 0.9rem;
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    .copy-btn {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      background: var(--bg-mute);
+      color: var(--text-soft);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.25rem 0.6rem;
+      font-size: 0.75rem;
+      cursor: pointer;
+      opacity: 0;
+      transition: all 0.2s;
+    }
+
+    pre:hover .copy-btn {
+      opacity: 1;
+    }
+
+    .copy-btn:hover {
+      background: var(--brand);
+      color: white;
+      border-color: var(--brand);
+    }
+
+    /* Tables */
+    .docs-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1.5rem 0;
+      font-size: 0.95rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+
+    .docs-table th, .docs-table td {
+      padding: 0.75rem 1rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .docs-table th {
+      background: var(--bg-soft);
+      font-weight: 600;
+      color: var(--text);
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .docs-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    .docs-table tr:hover td {
+      background: var(--bg-soft);
+    }
+
+    .docs-table td code {
+      font-size: 0.85em;
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .menu-toggle {
+        display: block;
+      }
+      
+      .sidebar {
+        position: fixed;
+        top: 60px;
+        left: 0;
+        bottom: 0;
+        transform: translateX(-100%);
+        z-index: 99;
+        box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+      }
+      
+      .sidebar.open {
+        transform: translateX(0);
+      }
+      
+      .content {
+        padding: 20px;
+      }
+      
+      h1 { font-size: 2rem; }
+      h2 { font-size: 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div style="display: flex; align-items: center; gap: 16px;">
+      <button class="menu-toggle" id="menu-toggle">☰</button>
+      <div class="nav-brand">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--brand);"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+        <span>JAVBUS Plugin Docs</span>
+      </div>
+    </div>
+    <div class="nav-actions">
+      <a href="https://github.com/WEP-56/JAVBUS" target="_blank">GitHub</a>
+      <button id="theme-toggle" title="切换主题">🌙</button>
+    </div>
+  </header>
+
+  <div class="wrapper">
+    <aside class="sidebar" id="sidebar">
+      <nav id="toc"></nav>
+    </aside>
+
+    <main class="content" id="content">
+      <div class="content-inner">
+        <h1>JSON 插件协议 v1</h1>
+        <p>JAVBUS 的磁力搜索源只接受 JSON 插件。插件不执行脚本，只描述一个站点的请求地址、响应格式、字段映射、发布页解析方式和少量能力标记。</p>
+
+        <h2>简介</h2>
+        <p>当前 v1 支持：</p>
+        <ul>
+          <li><code>responseType: "html"</code>：请求网页源码，用正则提取搜索结果、详情和文件列表。</li>
+          <li><code>responseType: "json"</code>：请求 JSON API，用点路径读取字段。</li>
+          <li>只支持 <code>GET</code> 请求。</li>
+          <li>支持搜索页和详情页。</li>
+          <li>支持发布页解析最新 <code>baseUrl</code>，包括静态多跳。</li>
+          <li>支持 Cloudflare 等人机验证站点的 WebView 手动验证流程。</li>
+        </ul>
+        <p>完整示例见 <code>example.json</code>。JSON 不能写 <code>//</code> 或 <code>/* */</code> 注释，示例使用 <code>_comment</code> 字段说明；解析器会忽略未知顶层字段。不要把注释字段放进 <code>headers</code>，否则会被当作真实 HTTP Header 发送。</p>
+
+        <h2>安装与管理</h2>
+        <p>应用本身不内置任何插件，插件需要用户自行安装。入口：<strong>设置 -> 插件目录</strong></p>
+        <p>支持三种安装方式：</p>
+        <ul>
+          <li><strong>粘贴 JSON</strong>：直接粘贴插件文本。</li>
+          <li><strong>选择 JSON 文件</strong>：本地选择 <code>.json</code> 文件。</li>
+          <li><strong>从 URL 安装</strong>：输入以 <code>.json</code> 结尾的 URL，应用下载后安装。</li>
+        </ul>
+        <p>插件保存到应用用户数据目录下的 <code>plugins</code> 子目录。文件名由 <code>id</code> 清理后生成，例如 <code>my-source.json</code>。如果编辑插件时修改了 <code>id</code>，旧文件会被删除并写入新文件。</p>
+
+        <h2>顶层结构</h2>
+        <script type="text/plain" class="code-block" data-lang="json">
+{
+  "schemaVersion": 1,
+  "id": "example-html",
+  "name": "Example HTML Source",
+  "enabled": true,
+  "baseUrl": "https://example.com",
+  "announcement": { ... },
+  "capabilities": { ... },
+  "headers": { ... },
+  "search": {},
+  "detail": {},
+  "fields": {},
+  "fileFields": {},
+  "defaults": {}
+}
+        </script>
+        
+        <table class="docs-table">
+          <thead>
+            <tr><th>字段</th><th>必填</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>schemaVersion</code></td><td>否</td><td>协议版本，默认 1 。</td></tr>
+            <tr><td><code>id</code></td><td>是</td><td>插件唯一 ID。建议小写英文、数字、短横线或下划线。</td></tr>
+            <tr><td><code>name</code></td><td>是</td><td>UI 显示名称。</td></tr>
+            <tr><td><code>enabled</code></td><td>否</td><td>是否启用，默认 <code>true</code> 。</td></tr>
+            <tr><td><code>baseUrl</code></td><td>条件必填</td><td>根地址。相对 URL 会基于它补全。没有启用 <code>announcement</code> 时必须是完整 URL。启用 <code>announcement</code> 时可以留空。</td></tr>
+            <tr><td><code>announcement</code></td><td>否</td><td>发布页配置，用于从发布站动态获取最新站点地址。</td></tr>
+            <tr><td><code>capabilities</code></td><td>否</td><td>插件能力标记。当前支持 <code>requiresHumanVerification</code> 。</td></tr>
+            <tr><td><code>headers</code></td><td>否</td><td>全局请求头，会和 endpoint 内的 <code>headers</code> 合并；endpoint 同名 header 会覆盖全局值。</td></tr>
+            <tr><td><code>search</code></td><td>是</td><td>搜索 endpoint。</td></tr>
+            <tr><td><code>detail</code></td><td>否</td><td>详情 endpoint，用于补全 magnet、infoHash、文件列表等。</td></tr>
+            <tr><td><code>fields</code></td><td>是</td><td>资源字段映射。</td></tr>
+            <tr><td><code>fileFields</code></td><td>否</td><td>文件列表字段映射。</td></tr>
+            <tr><td><code>defaults</code></td><td>否</td><td>字段缺失时的默认模板。</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Capabilities</h2>
+        <script type="text/plain" class="code-block" data-lang="json">
+{
+  "requiresHumanVerification": true
+}
+        </script>
+        <p><code>requiresHumanVerification</code> 表示站点可能触发 Cloudflare 等人机验证。启用后，应用在 HTTP 响应疑似挑战页时会弹出 WebView，让用户手动验证。</p>
+        <p>验证完成后，应用会做两件事：</p>
+        <ul>
+          <li>尝试读取页面 Cookie，供普通 HTTP 请求复用。</li>
+          <li>同时保留同 host 的 WebView 会话。后续搜索和详情会优先用已验证 WebView 静默加载 HTML，避免 HttpOnly Cookie 读不到时反复弹窗。</li>
+        </ul>
+        <p>如果站点不需要验证，保持 <code>false</code> 或省略 <code>capabilities</code>。</p>
+
+        <h2>Announcement (发布页)</h2>
+        <p>发布页用于应对站点频繁更换域名。解析出的地址只缓存在当前应用运行期内，不会改写插件 JSON。</p>
+        
+        <h3>单步发布页</h3>
+        <script type="text/plain" class="code-block" data-lang="json">
+{
+  "enabled": true,
+  "url": "https://example-fabu.com/",
+  "urlPattern": "<a[^ >]+data-href=\"([^\"]+)\"",
+  "urlDecoding": "base64",
+  "targetPattern": "最新地址"
+}
+        </script>
+        <table class="docs-table">
+          <thead>
+            <tr><th>字段</th><th>必填</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>enabled</code></td><td>否</td><td>是否启用发布页功能，默认 <code>false</code> 。</td></tr>
+            <tr><td><code>url</code></td><td>条件必填</td><td>单步发布页地址。未使用 <code>steps</code> 时必填。</td></tr>
+            <tr><td><code>urlPattern</code></td><td>条件必填</td><td>单步提取正则。未使用 <code>steps</code> 时必填。使用第 1 个捕获组 <code>()</code> 捕获地址或编码后的地址。</td></tr>
+            <tr><td><code>urlDecoding</code></td><td>否</td><td>解码方式：<code>none</code>、<code>base64</code>、<code>base64url</code>、<code>hex</code>。默认 <code>none</code> 。</td></tr>
+            <tr><td><code>targetPattern</code></td><td>否</td><td>优先关键词。应用会在命中位置附近约 500 个字符内查找该关键词，命中的候选地址优先使用。</td></tr>
+            <tr><td><code>steps</code></td><td>否</td><td>多跳发布页步骤。存在且非空时，优先使用 <code>steps</code>，忽略顶层 <code>url/urlPattern/urlDecoding/targetPattern</code> 。</td></tr>
+          </tbody>
+        </table>
+        <p>发布页解析出的地址可以是完整 URL，例如 <code>https://example.com/</code>；也可以是裸域名，例如 <code>example.com</code>，应用会补成 <code>https://example.com</code>。</p>
+
+        <h3>多跳发布页 (Steps)</h3>
+        <p>多跳用于处理“发布页 A 给出中转域名 B，中转页 B 的静态源码里再给出真实域名 C”的站点。它仍然是静态 HTTP + 正则解析，不执行 JavaScript，不进入 iframe。</p>
+        <script type="text/plain" class="code-block" data-lang="json">
+{
+  "enabled": true,
+  "steps": [
+    {
+      "url": "https://example-fabu.com/",
+      "urlPattern": "var\\s+spans='([^']+)'",
+      "urlDecoding": "base64",
+      "targetPattern": "主站"
+    },
+    {
+      "urlPattern": "host2\\s*=\\s*'([^']+)'",
+      "urlDecoding": "none"
+    }
+  ]
+}
+        </script>
+        <table class="docs-table">
+          <thead>
+            <tr><th>字段</th><th>必填</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>url</code></td><td>条件必填</td><td>当前步骤请求地址。第 1 步必须填写完整 URL；第 2 步及之后可省略，省略时等同于 <code>"{value}"</code> 。</td></tr>
+            <tr><td><code>urlPattern</code></td><td>是</td><td>当前步骤提取正则。使用第 1 个捕获组捕获地址或编码后的地址。</td></tr>
+            <tr><td><code>extract</code></td><td>否</td><td><code>urlPattern</code> 的别名。如果同时存在，优先使用 <code>urlPattern</code> 。</td></tr>
+            <tr><td><code>urlDecoding</code></td><td>否</td><td>当前步骤解码方式：<code>none</code>、<code>base64</code>、<code>base64url</code>、<code>hex</code>。默认 <code>none</code> 。</td></tr>
+            <tr><td><code>decode</code></td><td>否</td><td><code>urlDecoding</code> 的别名。如果同时存在，优先使用 <code>urlDecoding</code> 。</td></tr>
+            <tr><td><code>targetPattern</code></td><td>否</td><td>当前步骤优先关键词。行为和单步一致：在命中位置附近约 500 个字符内查找关键词。</td></tr>
+          </tbody>
+        </table>
+        
+        <p>第 2 步及之后的 <code>url</code> 支持变量：</p>
+        <table class="docs-table">
+          <thead>
+            <tr><th>变量</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>{value}</code> / <code>{url}</code></td><td>上一步解析出的完整 URL。</td></tr>
+            <tr><td><code>{origin}</code></td><td>上一步 URL 的 origin，例如 <code>https://example.com:8443</code> 。</td></tr>
+            <tr><td><code>{host}</code></td><td>上一步 URL 的 host，例如 <code>example.com</code> 。</td></tr>
+          </tbody>
+        </table>
+
+        <p><strong>候选地址排序规则：</strong></p>
+        <ul>
+          <li>命中 <code>targetPattern</code> 的候选优先。</li>
+          <li>同一优先级内保持页面出现顺序。</li>
+          <li>重复地址会去重。</li>
+        </ul>
+
+        <p><strong>发布页检查时机：</strong></p>
+        <ul>
+          <li><strong>首次安装</strong>：首次安装启用发布页的插件时，必须先成功解析最新地址；失败则不保存插件。</li>
+          <li><strong>首次搜索兜底</strong>：应用重启后运行时缓存会清空，搜索前会先尝试解析发布页。</li>
+          <li><strong>搜索失败</strong>：普通搜索失败时会刷新发布页并用新地址重试一次。</li>
+          <li><strong>手动刷新</strong>：插件管理页会为启用发布页的插件显示刷新按钮。</li>
+        </ul>
+        <p><strong>注意：</strong></p>
+        <ul>
+          <li><code>announcement.enabled</code> 为 <code>true</code> 时，<code>baseUrl</code> 可以留空。</li>
+          <li>搜索失败触发的发布页重试不会吞掉人机验证异常；需要验证时仍会弹 WebView。</li>
+          <li>多跳不执行 JavaScript，不处理 iframe 拼 URL。需要找到最终直出的 HTML/API 地址后再写插件。</li>
+        </ul>
+
+        <h2>模板变量</h2>
+        <p>模板变量用于 <code>search.url</code>、<code>detail.url</code> 和 <code>defaults</code>。</p>
+        
+        <h3>搜索变量</h3>
+        <table class="docs-table">
+          <thead>
+            <tr><th>变量</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>{query}</code></td><td>搜索关键词，已做 <code>Uri.encodeComponent</code> 编码。</td></tr>
+            <tr><td><code>{queryRaw}</code></td><td>搜索关键词原始值。生成最终 <code>Uri</code> 时，Dart 仍会按 URI 规则规范化空格和非 ASCII 字符。</td></tr>
+            <tr><td><code>{queryBase64}</code></td><td>搜索关键词的 UTF-8 URL-safe Base64，去掉末尾 <code>=</code> 。</td></tr>
+            <tr><td><code>{page}</code></td><td>从 <code>1</code> 开始的页码。</td></tr>
+            <tr><td><code>{page0}</code></td><td>从 <code>0</code> 开始的页码。</td></tr>
+          </tbody>
+        </table>
+
+        <h3>详情和默认值变量</h3>
+        <table class="docs-table">
+          <thead>
+            <tr><th>变量</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>{sourceItemId}</code></td><td>搜索结果中的源站条目 ID。常用于详情页路径。保持原始值，适合 <code>/detail/abc</code> 这种相对路径。</td></tr>
+            <tr><td><code>{sourceItemIdEncoded}</code></td><td>URL 编码后的 <code>sourceItemId</code>。适合 <code>/detail/{sourceItemIdEncoded}</code> 这种 ID 需要作为单一路径段的站点。</td></tr>
+            <tr><td><code>{infoHash}</code></td><td>info hash，通常为大写。</td></tr>
+            <tr><td><code>{infoHashLower}</code></td><td>小写 info hash。</td></tr>
+            <tr><td><code>{infoHashUpper}</code></td><td>大写 info hash。</td></tr>
+            <tr><td><code>{infoHashEncoded}</code> 等</td><td>对应值的 URL 编码版本。</td></tr>
+          </tbody>
+        </table>
+        <p><strong>重要：</strong>当前实现不会在模板替换时对所有变量统一编码。变量是否编码由变量名决定，例如 <code>{query}</code> 已编码、<code>{sourceItemId}</code> 未编码、<code>{sourceItemIdEncoded}</code> 已编码。</p>
+
+        <h2>Endpoint (搜索与详情)</h2>
+        <p><code>search</code> 和 <code>detail</code> 使用同一种结构。</p>
+        <script type="text/plain" class="code-block" data-lang="json">
+{
+  "method": "GET",
+  "url": "/search?q={query}&page={page}",
+  "responseType": "html",
+  "headers": {},
+  "itemsPath": "data.items",
+  "totalPath": "data.total",
+  "currentPagePath": "data.page",
+  "lastPagePath": "data.lastPage",
+  "rootPath": "data",
+  "filesPath": "files",
+  "rootPattern": "",
+  "itemPattern": "",
+  "fileRootPattern": "",
+  "filePattern": "",
+  "totalPattern": "",
+  "lastPagePattern": "",
+  "pageSize": 20
+}
+        </script>
+
+        <h3>通用字段</h3>
+        <table class="docs-table">
+          <thead>
+            <tr><th>字段</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>method</code></td><td>当前只支持 <code>GET</code> 。</td></tr>
+            <tr><td><code>url</code></td><td>请求 URL。可写绝对 URL，也可写相对 <code>baseUrl</code> 的路径。</td></tr>
+            <tr><td><code>responseType</code></td><td><code>html</code> 或 <code>json</code>，默认 <code>json</code> 。</td></tr>
+            <tr><td><code>headers</code></td><td>endpoint 专用请求头，会覆盖同名全局 header。</td></tr>
+            <tr><td><code>pageSize</code></td><td>每页数量，默认 <code>20</code>。用于根据 <code>total</code> 推算最后一页。</td></tr>
+          </tbody>
+        </table>
+
+        <h3>JSON Endpoint 字段</h3>
+        <table class="docs-table">
+          <thead>
+            <tr><th>字段</th><th>用于</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>itemsPath</code></td><td>search</td><td>搜索结果数组路径。</td></tr>
+            <tr><td><code>totalPath</code></td><td>search</td><td>总结果数路径。</td></tr>
+            <tr><td><code>currentPagePath</code></td><td>search</td><td>当前页路径。缺失时使用请求页码。</td></tr>
+            <tr><td><code>lastPagePath</code></td><td>search</td><td>最后一页路径。缺失时用 <code>total / pageSize</code> 推算。</td></tr>
+            <tr><td><code>rootPath</code></td><td>detail</td><td>详情对象路径。为空时使用响应根对象。</td></tr>
+            <tr><td><code>filesPath</code></td><td>detail</td><td>文件列表数组路径。</td></tr>
+          </tbody>
+        </table>
+        <p>路径使用点号访问对象，例如 <code>data.items</code>、<code>meta.total</code>。数组可用数字下标，例如 <code>data.0.name</code>。</p>
+
+        <h3>HTML Endpoint 字段</h3>
+        <table class="docs-table">
+          <thead>
+            <tr><th>字段</th><th>用于</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>rootPattern</code></td><td>search/detail</td><td>可选。先用正则截取局部 HTML 范围；优先使用第 1 个捕获组。</td></tr>
+            <tr><td><code>itemPattern</code></td><td>search/detail</td><td>必填。匹配一个资源条目或详情页主体信息。</td></tr>
+            <tr><td><code>fileRootPattern</code></td><td>detail</td><td>可选。先截取文件列表区域；优先使用第 1 个捕获组。</td></tr>
+            <tr><td><code>filePattern</code></td><td>detail</td><td>可选。匹配文件列表中的一个文件。</td></tr>
+            <tr><td><code>totalPattern</code></td><td>search</td><td>可选。匹配总结果数，使用第 1 个捕获组。</td></tr>
+            <tr><td><code>lastPagePattern</code></td><td>search</td><td>可选。匹配最后一页页码，使用第 1 个捕获组。</td></tr>
+          </tbody>
+        </table>
+
+        <p><strong>HTML 正则参数：</strong></p>
+        <ul>
+          <li><code>caseSensitive: false</code></li>
+          <li><code>dotAll: true</code></li>
+          <li><code>multiLine: true</code></li>
+        </ul>
+        <p><strong>正则提取支持两种方式：</strong></p>
+        <ul>
+          <li><strong>命名捕获组</strong>：捕获组名使用字段路径最后一段，例如 <code>(?&lt;infoHash&gt;[A-Fa-f0-9]{40})</code>。</li>
+          <li><strong>顺序捕获组</strong>：如果正则没有命名捕获组，会按 <code>fields</code> 或 <code>fileFields</code> 中字段出现顺序依次取第 1、2、3... 个捕获组。</li>
+        </ul>
+        <p><strong>HTML 捕获值会做基础清理：</strong></p>
+        <ul>
+          <li>去掉 HTML 标签。</li>
+          <li>解码 <code>&amp;nbsp;</code>、<code>&amp;#160;</code>、<code>&amp;#xA0;</code>、<code>&amp;amp;</code>、<code>&amp;quot;</code>、<code>&amp;#39;</code>、<code>&amp;lt;</code>、<code>&amp;gt;</code> 。</li>
+          <li>合并空白字符。</li>
+        </ul>
+        <p>JSON 字符串里的反斜杠要转义，例如正则 <code>\s</code> 要写成 <code>\\s</code>。</p>
+
+        <h2>Fields & FileFields</h2>
+        <p><code>fields</code> 把应用内部字段映射到 JSON 路径，或映射到 HTML 正则捕获组名。</p>
+        <script type="text/plain" class="code-block" data-lang="json">
+{
+  "sourceItemId": "sourceItemId",
+  "title": "title",
+  "infoHash": "infoHash",
+  "magnet": "magnet",
+  "size": "size",
+  "humanSize": "humanSize",
+  "seeders": "seeders",
+  "leechers": "leechers",
+  "score": "score",
+  "health": "health",
+  "verified": "verified",
+  "largestFile": "largestFile",
+  "webUrl": "webUrl",
+  "createdAt": "createdAt",
+  "lastSeen": "lastSeen"
+}
+        </script>
+        <table class="docs-table">
+          <thead>
+            <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>sourceItemId</code></td><td>string</td><td>源站详情 ID。缺失时使用 <code>infoHash</code>。搜索结果最终必须得到该字段，否则列表项会被丢弃。</td></tr>
+            <tr><td><code>title</code></td><td>string</td><td>资源标题。</td></tr>
+            <tr><td><code>infoHash</code></td><td>string</td><td>建议提供。详情页可补全；有它才能通过 <code>defaults.magnet</code> 生成 magnet。</td></tr>
+            <tr><td><code>magnet</code></td><td>string</td><td>磁力链接。可直接提取，也可由 <code>defaults.magnet</code> 生成。</td></tr>
+            <tr><td><code>size</code></td><td>int</td><td>字节数。</td></tr>
+            <tr><td><code>humanSize</code></td><td>string</td><td>人类可读大小，例如 <code>1.23 GB</code> 。</td></tr>
+            <tr><td><code>seeders</code></td><td>int</td><td>做种、热度或访问指标。不同站点含义可能不同。</td></tr>
+            <tr><td><code>leechers</code></td><td>int</td><td>下载、请求或热度指标。不同站点含义可能不同。</td></tr>
+            <tr><td><code>score</code></td><td>double</td><td>排序或评分。</td></tr>
+            <tr><td><code>health</code></td><td>double</td><td>健康度、文件数或其它站点指标。</td></tr>
+            <tr><td><code>verified</code></td><td>bool</td><td>是否验证。</td></tr>
+            <tr><td><code>largestFile</code></td><td>string</td><td>最大文件名或文件摘要。</td></tr>
+            <tr><td><code>webUrl</code></td><td>string</td><td>源站详情页。相对地址会基于当前有效 <code>baseUrl</code> 补全。</td></tr>
+            <tr><td><code>createdAt</code></td><td>ISO date</td><td>创建时间。</td></tr>
+            <tr><td><code>lastSeen</code></td><td>ISO date</td><td>最近发现时间。</td></tr>
+          </tbody>
+        </table>
+
+        <h3>FileFields</h3>
+        <p>详情页可返回文件列表。</p>
+        <script type="text/plain" class="code-block" data-lang="json">
+{
+  "path": "path",
+  "size": "size",
+  "humanSize": "humanSize"
+}
+        </script>
+        <table class="docs-table">
+          <thead>
+            <tr><th>字段</th><th>类型</th><th>说明</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>path</code></td><td>string</td><td>文件路径或文件名。</td></tr>
+            <tr><td><code>size</code></td><td>int</td><td>字节数。</td></tr>
+            <tr><td><code>humanSize</code></td><td>string</td><td>人类可读大小。</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Defaults</h2>
+        <p><code>defaults</code> 用于字段缺失时生成值。</p>
+        <script type="text/plain" class="code-block" data-lang="json">
+{
+  "magnet": "magnet:?xt=urn:btih:{infoHashUpper}",
+  "webUrl": "{sourceItemId}"
+}
+        </script>
+        <p><strong>常见用途：</strong></p>
+        <ul>
+          <li>列表页只返回 <code>infoHash</code>，用 <code>defaults.magnet</code> 生成 magnet。</li>
+          <li>列表页只返回 <code>infoHash</code>，用 <code>defaults.webUrl</code> 生成详情页链接。</li>
+          <li>HTML 列表页返回详情相对地址，先放到 <code>sourceItemId</code>，再用 <code>detail.url: "{sourceItemId}"</code> 和 <code>defaults.webUrl: "{sourceItemId}"</code>。</li>
+        </ul>
+
+        <h2>完整示例</h2>
+        
+        <h3>JSON API 示例</h3>
+        <script type="text/plain" class="code-block" data-lang="json">
+{
+  "schemaVersion": 1,
+  "id": "example-api",
+  "name": "Example API",
+  "enabled": true,
+  "baseUrl": "https://example.com",
+  "search": {
+    "method": "GET",
+    "url": "/api/search?q={query}&page={page}",
+    "responseType": "json",
+    "itemsPath": "data.items",
+    "totalPath": "data.total",
+    "currentPagePath": "data.page",
+    "lastPagePath": "data.lastPage",
+    "pageSize": 20
+  },
+  "detail": {
+    "method": "GET",
+    "url": "/api/torrent/{infoHashLower}",
+    "responseType": "json",
+    "rootPath": "data",
+    "filesPath": "files"
+  },
+  "fields": {
+    "sourceItemId": "id",
+    "title": "title",
+    "infoHash": "hash",
+    "size": "bytes",
+    "seeders": "seeders",
+    "leechers": "leechers",
+    "createdAt": "createdAt"
+  },
+  "fileFields": {
+    "path": "name",
+    "size": "bytes"
+  },
+  "defaults": {
+    "magnet": "magnet:?xt=urn:btih:{infoHashUpper}",
+    "webUrl": "/torrent/{infoHashLower}"
+  }
+}
+        </script>
+
+        <h3>HTML 正则示例</h3>
+        <p>假设搜索结果 HTML 类似：</p>
+        <script type="text/plain" class="code-block" data-lang="html">
+<div class="item">
+  <a href="/detail/abc123">Example Title</a>
+  <span class="hash">0123456789abcdef0123456789abcdef01234567</span>
+  <span class="size">1.2 GB</span>
+</div>
+        </script>
+        <p>插件可写成：</p>
+        <script type="text/plain" class="code-block" data-lang="json">
+{
+  "schemaVersion": 1,
+  "id": "example-html",
+  "name": "Example HTML",
+  "enabled": true,
+  "baseUrl": "https://example.com",
+  "headers": {
+    "User-Agent": "Mozilla/5.0"
+  },
+  "search": {
+    "method": "GET",
+    "url": "/search?q={query}&page={page}",
+    "responseType": "html",
+    "pageSize": 20,
+    "rootPattern": "<div class=\"result-list\">([\\s\\S]*?)<nav",
+    "itemPattern": "<div class=\"item\">\\s*<a href=\"(?<sourceItemId>[^\"]+)\">(?<title>.*?)</a>\\s*<span class=\"hash\">(?<infoHash>[A-Fa-f0-9]{40})</span>\\s*<span class=\"size\">(?<humanSize>.*?)</span>\\s*</div>",
+    "totalPattern": "(\\d+)\\s+results",
+    "lastPagePattern": "page=(\\d+)\" >Last"
+  },
+  "detail": {
+    "method": "GET",
+    "url": "{sourceItemId}",
+    "responseType": "html",
+    "itemPattern": "<h1[^>]*>(?<title>.*?)</h1>[\\s\\S]*?<a href=\"(?<magnet>magnet:\\?xt=urn:btih:(?<infoHash>[A-Fa-f0-9]{40})[^\"]*)\"",
+    "fileRootPattern": "<ul class=\"files\">([\\s\\S]*?)</ul>",
+    "filePattern": "<li>\\s*<span class=\"path\">(?<path>.*?)</span>\\s*<span class=\"size\">(?<humanSize>.*?)</span>\\s*</li>"
+  },
+  "fields": {
+    "sourceItemId": "sourceItemId",
+    "title": "title",
+    "infoHash": "infoHash",
+    "magnet": "magnet",
+    "humanSize": "humanSize",
+    "webUrl": "sourceItemId"
+  },
+  "fileFields": {
+    "path": "path",
+    "humanSize": "humanSize"
+  },
+  "defaults": {
+    "magnet": "magnet:?xt=urn:btih:{infoHashUpper}",
+    "webUrl": "{sourceItemId}"
+  }
+}
+        </script>
+
+        <h2>调试建议与限制</h2>
+        <h3>调试建议</h3>
+        <ul>
+          <li>先用浏览器确认搜索 URL 能访问，且返回的是静态 HTML 或 JSON。</li>
+          <li>HTML 插件先写 <code>rootPattern</code> 和 <code>itemPattern</code>，确认列表能匹配，再补详情页。</li>
+          <li>如果列表页只给详情链接，把它映射到 <code>sourceItemId</code>，再用 <code>detail.url: "{sourceItemId}"</code>。</li>
+          <li>如果详情 ID 需要作为单一路径段编码，使用 <code>{sourceItemIdEncoded}</code>。</li>
+          <li>如果没有 magnet 字段，只要能拿到 <code>infoHash</code>，就用 <code>defaults.magnet</code> 生成。</li>
+          <li>如果站点触发 Cloudflare，把 <code>capabilities.requiresHumanVerification</code> 设为 <code>true</code>。</li>
+          <li>如果站点频繁更换域名，配置 <code>announcement</code> 指向发布页。</li>
+          <li>URL 安装要求地址以 <code>.json</code> 结尾。</li>
+        </ul>
+
+        <h3>当前限制</h3>
+        <ul>
+          <li>只支持 <code>GET</code>。</li>
+          <li>没有登录表单流程。</li>
+          <li>没有 JavaScript 渲染爬取能力；人机验证只用于获取页面 HTML 或 Cookie。纯 JS 跳转、iframe 渲染或前端二次请求站点，需要找出最终直出的 HTML/API 地址后再写插件。</li>
+          <li>HTML 解析基于正则，适合结构稳定、重复项明显的站点。</li>
+          <li>Cookie 只保存在当前应用运行期内。CF 等站点优先依赖已验证 WebView 会话复用。</li>
+          <li>URL 安装只接受 <code>.json</code> 结尾地址。</li>
+        </ul>
+
+      </div>
+    </main>
+  </div>
+
+  <script>
+    // 主题切换
+    const themeToggle = document.getElementById('theme-toggle');
+    const html = document.documentElement;
+    const savedTheme = localStorage.getItem('theme') || 'light';
+    html.setAttribute('data-theme', savedTheme);
+    themeToggle.textContent = savedTheme === 'dark' ? '☀️' : '🌙';
+
+    themeToggle.addEventListener('click', () => {
+      const theme = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', theme);
+      localStorage.setItem('theme', theme);
+      themeToggle.textContent = theme === 'dark' ? '☀️' : '🌙';
+    });
+
+    // 移动端菜单
+    const menuToggle = document.getElementById('menu-toggle');
+    const sidebar = document.getElementById('sidebar');
+    menuToggle.addEventListener('click', () => {
+      sidebar.classList.toggle('open');
+    });
+
+    // 渲染代码块
+    document.querySelectorAll('.code-block').forEach(script => {
+      const pre = document.createElement('pre');
+      const code = document.createElement('code');
+      code.className = 'language-' + (script.dataset.lang || 'text');
+      code.textContent = script.textContent.trim();
+      pre.appendChild(code);
+      
+      const btn = document.createElement('button');
+      btn.textContent = 'Copy';
+      btn.className = 'copy-btn';
+      btn.addEventListener('click', () => {
+        navigator.clipboard.writeText(code.textContent).then(() => {
+          btn.textContent = 'Copied!';
+          setTimeout(() => btn.textContent = 'Copy', 2000);
+        });
+      });
+      pre.appendChild(btn);
+      
+      script.parentNode.insertBefore(pre, script);
+      script.remove();
+    });
+
+    // 生成目录 (TOC) 和 ScrollSpy
+    const tocContainer = document.getElementById('toc');
+    const contentArea = document.getElementById('content');
+    const headings = document.querySelectorAll('.content h2, .content h3');
+    const tocLinks = [];
+
+    headings.forEach((h, i) => {
+      h.id = 'section-' + i;
+      const link = document.createElement('a');
+      link.href = '#' + h.id;
+      link.textContent = h.textContent;
+      link.className = h.tagName === 'H3' ? 'toc-link toc-h3' : 'toc-link toc-h2';
+      tocContainer.appendChild(link);
+      tocLinks.push({ link, heading: h });
+      
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        contentArea.scrollTo({
+          top: h.offsetTop - 80,
+          behavior: 'smooth'
+        });
+        if (window.innerWidth <= 768) {
+          sidebar.classList.remove('open');
+        }
+      });
+    });
+
+    contentArea.addEventListener('scroll', () => {
+      let current = '';
+      headings.forEach(h => {
+        if (h.offsetTop <= contentArea.scrollTop + 100) {
+          current = h.id;
+        }
+      });
+      
+      tocLinks.forEach(({ link, heading }) => {
+        link.classList.remove('active');
+        if (heading.id === current) {
+          link.classList.add('active');
+        }
+      });
+    });
+
+    // 初始化第一个高亮
+    if (tocLinks.length > 0) {
+      tocLinks[0].link.classList.add('active');
+    }
+  </script>
+</body>
+</html>
